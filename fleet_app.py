@@ -306,7 +306,7 @@ def _read_soul_identity() -> tuple:
         except Exception:
             pass
     cfg = load_config()
-    return cfg.get("agent_name", "Agent"), cfg.get("human_name", "Human")
+    return cfg.get("agent_name", "Agent"), cfg.get("user_name", "Human")
 
 
 AGENT_NAME, HUMAN_NAME = _read_soul_identity()
@@ -2358,6 +2358,17 @@ class PairDialog(ctk.CTkToplevel):
             )
             with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
                 data = json.loads(resp.read())
+            if not data.get("ok") and data.get("error") == "missing_scope":
+                # User token lacks channels:history — retry with bot token
+                bot = BridgeWindow._bot_token()
+                if bot:
+                    req = urllib.request.Request(
+                        f"https://slack.com/api/conversations.history"
+                        f"?channel={FLEET_PAIRING_CHANNEL}&limit=50",
+                        headers={"Authorization": f"Bearer {bot}"}
+                    )
+                    with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+                        data = json.loads(resp.read())
             if not data.get("ok"):
                 raise ValueError(data.get("error", "unknown"))
             now = time.time()

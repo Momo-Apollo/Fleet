@@ -66,7 +66,9 @@ if [[ -z "$PYTHON_BIN" ]]; then
         info "Homebrew not found — installing Homebrew first"
         /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
             || die "Homebrew install failed — install manually from https://brew.sh then re-run"
-        [[ -x /opt/homebrew/bin/brew ]] && eval "$(/opt/homebrew/bin/brew shellenv)"
+        for _brew_bin in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+            [[ -x "$_brew_bin" ]] && eval "$($_brew_bin shellenv)" && break
+        done
         ok "Homebrew installed"
     fi
     brew install python3 || die "python3 install failed — install manually and re-run"
@@ -389,7 +391,7 @@ fi
 
 # ── Phase 7: Python deps ──────────────────────────────────────────────────────
 info "Python dependencies"
-"$PYTHON_BIN" -m pip install --quiet --upgrade customtkinter tkinterdnd2
+"$PYTHON_BIN" -m pip install --quiet --upgrade --break-system-packages customtkinter tkinterdnd2
 ok "customtkinter + tkinterdnd2 installed"
 
 # ── Summary ───────────────────────────────────────────────────────────────────

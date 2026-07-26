@@ -113,7 +113,7 @@ LOGS_DIR = FLEET_DIR / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
 FLEET_PAIRING_CHANNEL = "C0BK59E8XLZ"
 # Repo root — resolved through the symlink so git pull lands in the right place
-_REPO_DIR = Path(__file__).resolve().parent.parent
+_REPO_DIR = Path(__file__).resolve().parent
 # Support-bot roster
 ROSTER_FILE        = Path.home() / "projects" / "tt-support-bot" / "roster.json"
 ROSTER_AGENTS_FILE = Path.home() / "projects" / "tt-support-bot" / "config" / "agents.json"

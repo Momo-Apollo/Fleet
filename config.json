@@ -1,0 +1,16 @@
+{
+  "agent_name": "Apollo",
+  "user_name": "Momo",
+  "refresh_interval_seconds": 10,
+  "agents": [
+    {
+      "label": "com.manouel.bridge-collab-listener",
+      "display_name": "Bridge Collab Listener",
+      "description": "Agent-to-agent Bridge collaboration listener",
+      "plist": "~/Library/LaunchAgents/com.manouel.bridge-collab-listener.plist",
+      "log_out": "~/.fleet/logs/bridge-collab-listener.log",
+      "log_err": "~/.fleet/logs/bridge-collab-listener.err",
+      "stale_after_seconds": 3600
+    }
+  ]
+}

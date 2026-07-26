@@ -246,7 +246,9 @@ def to_tilde(s):
 
 # Pass B: machine-resident plists whose label prefix matches labels already in
 # the template — avoids pulling in Adobe/Spotify/etc.
-prefixes = set()
+# Always seed with the current user's namespace so fresh installs (empty
+# template) still pick up plists written earlier in this install run.
+prefixes = {NEW_PFX}
 for lbl in known:
     parts = lbl.split('.')
     if len(parts) >= 3:

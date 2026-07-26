@@ -142,12 +142,57 @@ else
     warn "No skills found in ~/.claude/commands — add them manually or via the + button in Fleet"
 fi
 
-# ── Phase 5: discover existing listeners ─────────────────────────────────────
-# The installer does not deploy listeners — those are per-user and set up
-# separately. This pass just finds whatever launchd agents are already running
-# on the machine so they show up in Fleet's Agents panel immediately.
-info "Discovering existing listeners"
-ok "machine-resident plists will be registered in config.json (Pass B below)"
+# ── Phase 5: bridge-collab-listener ──────────────────────────────────────────
+info "Bridge listener"
+
+BCL_LABEL="com.${USER}.bridge-collab-listener"
+BCL_PLIST="$HOME/Library/LaunchAgents/${BCL_LABEL}.plist"
+BCL_LOG="$FLEET_DIR/logs/bridge-collab-listener.log"
+BCL_ERR="$FLEET_DIR/logs/bridge-collab-listener.err"
+
+if [[ -z "$SLACK_TOKEN" ]]; then
+    warn "Slack token not provided — bridge listener skipped (add token to ~/.fleet/secrets.json and re-run)"
+else
+    if [[ -f "$BCL_PLIST" ]]; then
+        ok "plist already exists — reloading"
+        launchctl bootout "gui/$UID/$BCL_LABEL" 2>/dev/null || true
+    else
+        cat > "$BCL_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${BCL_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${PYTHON_BIN}</string>
+        <string>${FLEET_DIR}/bridge-collab-listener.py</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>${HOME}</string>
+        <key>CLAUDE_BIN</key>
+        <string>${CLAUDE_BIN}</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>${BCL_LOG}</string>
+    <key>StandardErrorPath</key>
+    <string>${BCL_ERR}</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+EOF
+        ok "plist written → $BCL_PLIST"
+    fi
+    launchctl bootstrap "gui/$UID" "$BCL_PLIST" \
+        && ok "bridge listener bootstrapped" \
+        || warn "launchctl bootstrap failed — check $BCL_ERR"
+fi
 
 # ── Build config.json ─────────────────────────────────────────────────────────
 info "Building config.json"

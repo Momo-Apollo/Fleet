@@ -21,7 +21,15 @@ from pathlib import Path
 
 FLEET_PAIRING_CHANNEL = "C0BK59E8XLZ"
 HEARTBEAT_INTERVAL    = 300   # 5 minutes
-CLAUDE_BIN            = "/opt/homebrew/bin/claude"
+CLAUDE_BIN            = (
+    os.environ.get("CLAUDE_BIN")
+    or next((p for p in [
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+        os.path.expanduser("~/.local/bin/claude"),
+    ] if os.path.isfile(p)), None)
+    or "claude"
+)
 
 def _load_bridge_cfg() -> dict:
     p = Path.home() / ".fleet" / "config.json"

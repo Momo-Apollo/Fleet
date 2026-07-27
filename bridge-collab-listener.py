@@ -104,6 +104,7 @@ CLAUDE_TIMEOUT  = 300  # seconds per claude --print call (extended for FS work)
 DEFAULT_WORKDIR = str(Path.home())
 
 STATE_DIR = Path.home() / ".claude" / "monitor-state"
+STATE_DIR.mkdir(parents=True, exist_ok=True)
 ENV_FILE  = STATE_DIR / ".env"
 LOG_FILE  = STATE_DIR / "bridge-collab-listener.log"
 

@@ -2065,6 +2065,9 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
                     name = user_names.get(uid, uid)
                     dt   = datetime.fromtimestamp(float(m.get("ts", 0)), tz=self._CDT)
                     text = self._SENT_FOOTER.sub("", m.get("text", "")).strip()
+                    for f in m.get("files", []):
+                        fname = f.get("name") or f.get("title") or "file"
+                        text = (text + "\n" if text else "") + f"[📎 {fname}]"
                     lines.append(f"{name} [{dt.strftime('%H:%M CDT')}]\n{text}\n")
                 result = "\n".join(lines)
                 self.after(0, lambda r=result: self._on_history(r))

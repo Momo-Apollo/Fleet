@@ -2201,17 +2201,28 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
             self._status_bar.configure(fg_color=C_CARD)
             on_signal_done = lambda _: None
 
-        # Send one ::peerName-auto:: signal per peer into the shared channel
-        for i, peer in enumerate(peers):
-            pn = peer["agent"]
-            msg = f"::{pn.lower()}-auto state={state} from={HUMAN_NAME.lower()}::"
-            prompt = (
-                f'Send this exact message to Slack channel {ch}: "{msg}"\n'
-                "Do not add 'Sent using Claude' — it is appended automatically."
-            )
-            cb = on_signal_done if i == len(peers) - 1 else lambda _: None
-            self._claude(prompt, cb, timeout=30,
-                         allowed_tools="mcp__plugin_slack_slack__slack_send_message")
+        def _post_signals():
+            out = "(no output)"
+            for peer in peers:
+                pn = peer["agent"]
+                msg = f"::{pn.lower()}-auto state={state} from={HUMAN_NAME.lower()}::"
+                prompt = (
+                    f'Send this exact message to Slack channel {ch}: "{msg}"\n'
+                    "Do not add 'Sent using Claude' — it is appended automatically."
+                )
+                try:
+                    r = subprocess.run(
+                        [self.CLAUDE_BIN, "--print", "--allowedTools",
+                         "mcp__plugin_slack_slack__slack_send_message"],
+                        input=prompt, capture_output=True, text=True, timeout=30,
+                    )
+                    out = self._clean(r.stdout) or "(no output)"
+                except subprocess.TimeoutExpired:
+                    out = "(timed out)"
+                except Exception as e:
+                    out = f"(error: {e})"
+            self.after(0, lambda: on_signal_done(out))
+        threading.Thread(target=_post_signals, daemon=True).start()
 
     @staticmethod
     def _write_bridge_state(armed: bool) -> None:

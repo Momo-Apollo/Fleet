@@ -80,10 +80,9 @@ _SELF_NAME, _SELF_HUMAN = _read_soul_identity()
 
 if not BRIDGE_DM:
     sys.stderr.write(
-        "bridge-collab-listener: no bridge channel in ~/.fleet/config.json — "
-        "open Fleet and use Pair to configure the Bridge first.\n"
+        "bridge-collab-listener: no bridge channel yet — "
+        "will poll until Fleet is paired.\n"
     )
-    sys.exit(1)
 
 SLACK_TOOLS = (
     "mcp__plugin_slack_slack__slack_read_channel,"
@@ -224,6 +223,68 @@ def _parse_workdir(task_text: str) -> str:
             return str(p)
         log.warning("workdir %s does not exist — using home dir", p)
     return DEFAULT_WORKDIR
+
+
+# ── auto-respond ─────────────────────────────────────────────────────────────
+
+def _detect_auto_signal(msgs: list, self_name: str) -> bool | None:
+    """Return True if most recent ::selfName-auto:: signal is 'on', False if 'off', None if absent."""
+    sentinel = f"::{self_name.lower()}-auto"
+    for m in reversed(msgs):
+        txt = m.get("text") or ""
+        if sentinel in txt:
+            return "state=on" in txt
+    return None
+
+
+def _make_auto_prompt(bridge_dm: str, peer_uids: set, peer_labels: dict, self_uid: str, self_name: str) -> str:
+    peer_id_block = " ".join(f"{uid} = {name}" for uid, name in peer_labels.items())
+    peer_names_str = "/".join(peer_labels.values())
+    return (
+        f"Check Slack channel {bridge_dm} (limit 10). "
+        f"{self_uid} = {self_name} (you). {peer_id_block} (peer(s)). "
+        "Rules — follow ALL of them:\n"
+        f"1. ONLY respond to messages from peers ({peer_names_str}). "
+        f"Never respond to {self_name}'s own messages.\n"
+        f"2. Only reply if the most recent peer message has NO reply from {self_name} ({self_uid}) after it. "
+        f"If {self_name} has already replied after the last peer message, output exactly: NO_OP\n"
+        "3. If the channel's most recent message is from you or a human, output exactly: NO_OP\n"
+        f"4. If a reply is genuinely warranted: send a direct, substantive response. "
+        f"Sign with ' — {self_name}'. Do NOT add 'Sent using Claude'.\n"
+        "When in doubt, NO_OP."
+    )
+
+
+def _run_auto_session(bridge_dm: str, peer_uids: set, peer_labels: dict, self_uid: str, self_name: str) -> None:
+    """Poll and auto-respond until ::selfName-auto state=off:: is detected."""
+    log.info("auto-respond session started")
+    while True:
+        time.sleep(POLL_INTERVAL)
+        try:
+            fresh = _load_bridge_cfg()
+            cfg = fresh if fresh else {}
+            current_dm = cfg.get("channel", bridge_dm)
+            msgs = _dm_history(limit=25, channel=current_dm)
+            # Check if auto was turned off
+            want_on = _detect_auto_signal(msgs, self_name)
+            if want_on is False:
+                log.info("auto-respond: off signal received — returning to watch mode")
+                return
+            prompt = _make_auto_prompt(current_dm, peer_uids, peer_labels, self_uid, self_name)
+            r = subprocess.run(
+                [CLAUDE_BIN, "--print", "--allowedTools", SLACK_TOOLS],
+                input=prompt,
+                capture_output=True, text=True,
+                timeout=120,
+            )
+            out = "\n".join(
+                l for l in r.stdout.splitlines()
+                if not l.startswith("Permission allow rule")
+            ).strip()
+            if out and out not in ("NO_OP", "TASK_COMPLETE"):
+                log.info("auto-respond: replied")
+        except Exception as e:
+            log.exception("auto-respond error: %s", e)
 
 
 # ── detection ─────────────────────────────────────────────────────────────────
@@ -370,6 +431,11 @@ def main() -> None:
             peer_uids   = _get_peer_uids(cfg)
             peer_labels = _get_peer_labels(cfg)
 
+            if not bridge_dm:
+                log.info("watch: no bridge channel configured yet — waiting for pair")
+                time.sleep(POLL_INTERVAL)
+                continue
+
             msgs = _dm_history(limit=25, channel=bridge_dm)
             task_text = _find_open_peer_task(msgs, peer_uids, peer_labels, self_uid, self_name)
             if task_text is not None:
@@ -383,9 +449,15 @@ def main() -> None:
                 _run_collab_session(workdir, bridge_dm, peer_uids, peer_labels, self_uid, self_name)
                 log.info("collab session ended — resuming watch mode")
             else:
-                no_task_streak += 1
-                if no_task_streak % 10 == 0:
-                    log.info("watch: %d consecutive no-task polls", no_task_streak)
+                want_auto = _detect_auto_signal(msgs, self_name)
+                if want_auto is True:
+                    log.info("auto-respond signal detected — entering auto session")
+                    _run_auto_session(bridge_dm, peer_uids, peer_labels, self_uid, self_name)
+                    log.info("auto session ended — resuming watch mode")
+                else:
+                    no_task_streak += 1
+                    if no_task_streak % 10 == 0:
+                        log.info("watch: %d consecutive no-task polls", no_task_streak)
         except Exception as e:
             log.exception("watch loop error: %s", e)
         time.sleep(POLL_INTERVAL)

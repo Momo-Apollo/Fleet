@@ -403,8 +403,8 @@ fi
 
 # ── Phase 7: Python deps ──────────────────────────────────────────────────────
 info "Python dependencies"
-"$PYTHON_BIN" -m pip install --quiet --upgrade --break-system-packages customtkinter tkinterdnd2
-ok "customtkinter + tkinterdnd2 installed"
+"$PYTHON_BIN" -m pip install --quiet --upgrade --break-system-packages customtkinter tkinterdnd2 pyobjc-framework-Cocoa
+ok "customtkinter + tkinterdnd2 + pyobjc installed"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 print ""

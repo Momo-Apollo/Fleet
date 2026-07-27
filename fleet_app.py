@@ -106,6 +106,16 @@ import customtkinter as ctk
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 FLEET_DIR = Path.home() / ".fleet"
+
+# Set macOS dock icon from the .icns file copied during install
+try:
+    import AppKit as _AppKit
+    _icns = FLEET_DIR / "ApolloFleet.icns"
+    if _icns.exists():
+        _img = _AppKit.NSImage.alloc().initWithContentsOfFile_(str(_icns))
+        _AppKit.NSApplication.sharedApplication().setApplicationIconImage_(_img)
+except Exception:
+    pass
 CONFIG_FILE = FLEET_DIR / "config.json"
 STATUS_DIR = FLEET_DIR / "status"
 AUDIT_LOG = FLEET_DIR / "console-audit.log"

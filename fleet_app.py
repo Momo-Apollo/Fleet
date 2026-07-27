@@ -2493,16 +2493,22 @@ class PairDialog(ctk.CTkToplevel):
 
         def run():
             try:
-                # Open DM to get channel ID
-                payload = json.dumps({"users": agent["uid"]}).encode()
-                req = urllib.request.Request(
-                    "https://slack.com/api/conversations.open",
-                    data=payload,
-                    headers={"Authorization": f"Bearer {token}",
-                             "Content-Type": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
-                    dm_data = json.loads(resp.read())
+                # Open DM to get channel ID; fall back to bot token on missing_scope
+                def _open_dm(tok, uids):
+                    payload = json.dumps({"users": uids}).encode()
+                    req = urllib.request.Request(
+                        "https://slack.com/api/conversations.open",
+                        data=payload,
+                        headers={"Authorization": f"Bearer {tok}",
+                                 "Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+                        return json.loads(resp.read())
+                dm_data = _open_dm(token, agent["uid"])
+                if not dm_data.get("ok") and dm_data.get("error") == "missing_scope":
+                    bot = BridgeWindow._bot_token()
+                    if bot:
+                        dm_data = _open_dm(bot, agent["uid"])
                 if not dm_data.get("ok"):
                     raise ValueError(dm_data.get("error", "unknown"))
                 channel_id = dm_data["channel"]["id"]
@@ -2567,17 +2573,23 @@ class PairDialog(ctk.CTkToplevel):
                     auth_data = json.loads(resp.read())
                 self_uid = auth_data.get("user_id", "")
 
-                # Open group DM (conversations.open accepts comma-joined UIDs)
+                # Open group DM; fall back to bot token on missing_scope
                 all_uids = ",".join(a["uid"] for a in agents)
-                payload = json.dumps({"users": all_uids}).encode()
-                req = urllib.request.Request(
-                    "https://slack.com/api/conversations.open",
-                    data=payload,
-                    headers={"Authorization": f"Bearer {token}",
-                             "Content-Type": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
-                    dm_data = json.loads(resp.read())
+                def _open_group_dm(tok, uids):
+                    payload = json.dumps({"users": uids}).encode()
+                    req = urllib.request.Request(
+                        "https://slack.com/api/conversations.open",
+                        data=payload,
+                        headers={"Authorization": f"Bearer {tok}",
+                                 "Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+                        return json.loads(resp.read())
+                dm_data = _open_group_dm(token, all_uids)
+                if not dm_data.get("ok") and dm_data.get("error") == "missing_scope":
+                    bot = BridgeWindow._bot_token()
+                    if bot:
+                        dm_data = _open_group_dm(bot, all_uids)
                 if not dm_data.get("ok"):
                     raise ValueError(dm_data.get("error", "unknown"))
                 channel_id = dm_data["channel"]["id"]

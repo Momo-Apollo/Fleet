@@ -34,6 +34,10 @@ USER_NAME=$(ask ">")
 print "  Slack token for Bridge panel (xoxp-... or Enter to skip):"
 SLACK_TOKEN=$(ask ">")
 
+print "  Claude OAuth token for auto-respond daemon (requires Claude subscription)."
+print "  Run 'claude setup-token' to generate one, then paste here. Enter to skip."
+CLAUDE_TOKEN=$(ask ">")
+
 # ── Phase 2: prereqs ──────────────────────────────────────────────────────────
 info "Prerequisites"
 
@@ -113,17 +117,21 @@ LAUNCH
 chmod +x "$FLEET_DIR/launch.sh"
 ok "launch.sh written"
 
-# secrets.json — Slack token for Bridge
-if [[ -n "$SLACK_TOKEN" ]]; then
-    SLACK_TOKEN="$SLACK_TOKEN" "$PYTHON_BIN" -c "
-import json, os
-open('$FLEET_DIR/secrets.json', 'w').write(
-    json.dumps({'slack_token': os.environ['SLACK_TOKEN']}, indent=2)
-)
+# secrets.json — tokens (preserves existing keys on re-run)
+if [[ -n "$SLACK_TOKEN" || -n "$CLAUDE_TOKEN" ]]; then
+    SLACK_TOKEN="$SLACK_TOKEN" CLAUDE_TOKEN="$CLAUDE_TOKEN" "$PYTHON_BIN" -c "
+import json, os, pathlib
+p = pathlib.Path('$FLEET_DIR/secrets.json')
+existing = json.loads(p.read_text()) if p.exists() else {}
+st = os.environ.get('SLACK_TOKEN', '')
+ct = os.environ.get('CLAUDE_TOKEN', '')
+if st: existing['slack_token'] = st
+if ct: existing['claude_token'] = ct
+p.write_text(json.dumps(existing, indent=2))
 "
     ok "secrets.json written"
 else
-    warn "Slack token skipped — Bridge panel won't connect until you add it (see summary)"
+    warn "No tokens provided — Bridge and auto-respond won't work until tokens are set (see summary)"
 fi
 
 # ── Phase 4: discover existing skills ────────────────────────────────────────
@@ -417,7 +425,14 @@ print ""
 
 if [[ -z "$SLACK_TOKEN" ]]; then
     print "  ⚠ Bridge panel needs a Slack token:"
-    print "    echo '{\"slack_token\":\"xoxp-...\"}' > ~/.fleet/secrets.json"
+    print "    Add to ~/.fleet/secrets.json:  \"slack_token\": \"xoxp-...\""
+    print ""
+fi
+
+if [[ -z "$CLAUDE_TOKEN" ]]; then
+    print "  ⚠ Auto-respond needs a Claude subscription token:"
+    print "    1. claude setup-token"
+    print "    2. Add to ~/.fleet/secrets.json:  \"claude_token\": \"sk-ant-oat01-...\""
     print ""
 fi
 

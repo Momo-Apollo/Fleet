@@ -47,11 +47,12 @@ info "Checking CLAUDE.md"
 CLAUDE_MD="$HOME/.claude/CLAUDE.md"
 IDENTITY_LINE="@~/.claude/SOUL.md"
 
-if [[ -f "$CLAUDE_MD" ]] && grep -qF "$IDENTITY_LINE" "$CLAUDE_MD"; then
+if [[ -f "$CLAUDE_MD" ]]; then
     sed -i '' '/^@~\/.claude\/SOUL\.md$/d' "$CLAUDE_MD"
-    ok "SOUL.md reference removed from CLAUDE.md"
+    sed -i '' '/^@~\/.fleet\/FLEET-CONTEXT\.md$/d' "$CLAUDE_MD"
+    ok "Fleet references removed from CLAUDE.md"
 else
-    ok "CLAUDE.md clean — nothing to remove"
+    ok "CLAUDE.md not found — nothing to remove"
 fi
 
 # ── SOUL.md ───────────────────────────────────────────────────────────────────

@@ -449,6 +449,10 @@ def main() -> None:
                 _run_collab_session(workdir, bridge_dm, peer_uids, peer_labels, self_uid, self_name)
                 log.info("collab session ended — resuming watch mode")
             else:
+                log.info("auto check: ch=%s n=%d has_sentinel=%s",
+                         bridge_dm, len(msgs),
+                         any(f"::{self_name.lower()}-auto" in (m.get("text") or "")
+                             for m in msgs))
                 want_auto = _detect_auto_signal(msgs, self_name)
                 if want_auto is True:
                     log.info("auto-respond signal detected — entering auto session")

@@ -1584,6 +1584,8 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         self._collab_active = False
         self._collab_exchanges = 0
         self._collab_workdir = str(Path.home())
+        self._auto_stop = threading.Event()
+        self._auto_active = False
         self._composing = False
         self._compose_id = None
         self._compose_frame = 0
@@ -2071,6 +2073,17 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
                     lines.append(f"{name} [{dt.strftime('%H:%M CDT')}]\n{text}\n")
                 result = "\n".join(lines)
                 self.after(0, lambda r=result: self._on_history(r))
+                # Auto-signal detection — check if peer told us to start/stop auto-respond
+                sn_lower = self._bridge.get("self_name", "").lower()
+                sentinel = f"::{sn_lower}-auto"
+                want_on = None
+                for m in reversed(msgs):
+                    txt = m.get("text", "")
+                    if sentinel in txt:
+                        want_on = "state=on" in txt
+                        break
+                if want_on is not None:
+                    self.after(0, lambda w=want_on: self._handle_auto_signal(w))
             except Exception as e:
                 self.after(0, lambda err=str(e): self._on_history(f"(refresh error: {err})"))
 
@@ -2286,6 +2299,34 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
             except Exception:
                 pass
 
+    def _handle_auto_signal(self, want_on: bool):
+        if want_on and not self._auto_active:
+            self._auto_active = True
+            self._auto_stop.clear()
+            self._auto_lbl.configure(text="⚡ AUTO ON — peer signalled")
+            self._status_bar.configure(fg_color="#3B1010")
+            threading.Thread(target=self._auto_loop, daemon=True).start()
+        elif not want_on and self._auto_active:
+            self._auto_active = False
+            self._auto_stop.set()
+            self._auto_lbl.configure(text="")
+            self._status_bar.configure(fg_color=C_CARD)
+
+    def _auto_loop(self):
+        while not self._auto_stop.wait(30):
+            prompt = self._auto_prompt()
+            try:
+                r = subprocess.run(
+                    [self.CLAUDE_BIN, "--print", "--allowedTools", self._SLACK_TOOLS],
+                    input=prompt,
+                    capture_output=True, text=True, timeout=120,
+                )
+                out = self._clean(r.stdout)
+                if out and out != "NO_OP":
+                    self.after(0, self._refresh_history)
+            except Exception:
+                pass
+
     def _poll_loop(self):
         while not self._poll_stop.wait(5):
             self.after(0, self._refresh_history)
@@ -2293,6 +2334,7 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
     def destroy(self):
         self._poll_stop.set()
         self._collab_stop.set()
+        self._auto_stop.set()
         super().destroy()
 
 

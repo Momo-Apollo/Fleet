@@ -4,6 +4,7 @@ peer-initiated ::collab-task:: sentinels and drives the collab response loop."""
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
@@ -43,6 +44,62 @@ def _claude_env() -> dict:
         except Exception:
             pass
     return env
+
+def _check_claude_token() -> None:
+    """Warn via Slack if the Claude token is missing, expired, or expiring soon."""
+    p = Path.home() / ".fleet" / "secrets.json"
+    if not p.exists():
+        return
+    try:
+        secrets = json.loads(p.read_text())
+    except Exception:
+        return
+
+    if not secrets.get("claude_token"):
+        log.warning("claude_token missing from secrets.json — auto-respond will time out")
+        return
+
+    expires_str = secrets.get("claude_token_expires", "")
+    if not expires_str:
+        return
+
+    try:
+        expires = datetime.date.fromisoformat(expires_str)
+    except ValueError:
+        return
+
+    days_left = (expires - datetime.date.today()).days
+    if days_left > 30:
+        return
+
+    if days_left <= 0:
+        msg = (
+            f":rotating_light: Claude token expired {abs(days_left)} day(s) ago. "
+            f"Auto-respond is down. Run `claude setup-token`, update `~/.fleet/secrets.json` as `claude_token`, "
+            f"then restart the daemon."
+        )
+    else:
+        msg = (
+            f":warning: Claude token expires in {days_left} day(s). "
+            f"Run `claude setup-token`, update `~/.fleet/secrets.json` as `claude_token`, "
+            f"then restart the daemon."
+        )
+
+    log.warning("token check: %s", msg)
+    try:
+        cfg = _load_bridge_cfg()
+        ch = cfg.get("channel", "")
+        if ch:
+            _post_message(ch, msg)
+    except Exception as e:
+        log.warning("token warning DM failed: %s", e)
+
+
+def _is_auth_error(stderr: str) -> bool:
+    """Return True if claude subprocess stderr indicates an authentication failure."""
+    low = (stderr or "").lower()
+    return any(k in low for k in ("authentication", "unauthorized", "invalid token", "oauth", "login required"))
+
 
 def _load_bridge_cfg() -> dict:
     p = Path.home() / ".fleet" / "config.json"
@@ -293,6 +350,16 @@ def _run_auto_session(bridge_dm: str, peer_uids: set, peer_labels: dict, self_ui
                 timeout=120,
                 env=_claude_env(),
             )
+            if _is_auth_error(r.stderr):
+                log.error("auto-respond: auth failure — token expired or invalid")
+                cfg2 = _load_bridge_cfg()
+                ch2 = cfg2.get("channel", "")
+                if ch2:
+                    _post_message(ch2,
+                        ":rotating_light: Auto-respond auth failure — Claude token expired or invalid. "
+                        "Run `claude setup-token`, update `~/.fleet/secrets.json` as `claude_token`, "
+                        "then restart the daemon.")
+                return
             out = "\n".join(
                 l for l in r.stdout.splitlines()
                 if not l.startswith("Permission allow rule")
@@ -396,6 +463,13 @@ def _run_collab_session(workdir: str, bridge_dm: str, peer_uids: set, peer_label
                 cwd=cwd,
                 env=_claude_env(),
             )
+            if _is_auth_error(r.stderr):
+                log.error("collab: auth failure — token expired or invalid")
+                _post_message(bridge_dm,
+                    ":rotating_light: Collab auth failure — Claude token expired or invalid. "
+                    "Run `claude setup-token`, update `~/.fleet/secrets.json` as `claude_token`, "
+                    "then restart the daemon.")
+                break
             # strip permission-noise lines
             out = "\n".join(
                 l for l in r.stdout.splitlines()
@@ -418,6 +492,7 @@ def _run_collab_session(workdir: str, bridge_dm: str, peer_uids: set, peer_label
 
 def main() -> None:
     log.info("bridge-collab-listener starting — polling every %ds", POLL_INTERVAL)
+    _check_claude_token()
 
     def _heartbeat_loop():
         while True:

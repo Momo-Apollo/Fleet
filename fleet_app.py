@@ -2210,7 +2210,7 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
                 "Do not add 'Sent using Claude' — it is appended automatically."
             )
             cb = on_signal_done if i == len(peers) - 1 else lambda _: None
-            self._claude(prompt, cb,
+            self._claude(prompt, cb, timeout=30,
                          allowed_tools="mcp__plugin_slack_slack__slack_send_message")
 
     @staticmethod

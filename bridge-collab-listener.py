@@ -31,6 +31,19 @@ CLAUDE_BIN            = (
     or "claude"
 )
 
+def _claude_env() -> dict:
+    """Return os.environ copy with CLAUDE_CODE_OAUTH_TOKEN injected from secrets.json."""
+    env = os.environ.copy()
+    p = Path.home() / ".fleet" / "secrets.json"
+    if p.exists():
+        try:
+            tok = json.loads(p.read_text()).get("claude_token", "")
+            if tok:
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = tok
+        except Exception:
+            pass
+    return env
+
 def _load_bridge_cfg() -> dict:
     p = Path.home() / ".fleet" / "config.json"
     if p.exists():
@@ -206,7 +219,8 @@ def _post_via_claude(text: str, channel: str = "") -> None:
         subprocess.run(
             [CLAUDE_BIN, "--print", "--allowedTools",
              "mcp__plugin_slack_slack__slack_send_message"],
-            input=prompt, capture_output=True, text=True, timeout=30
+            input=prompt, capture_output=True, text=True, timeout=30,
+            env=_claude_env(),
         )
     except Exception as e:
         log.warning("_post_via_claude failed: %s", e)
@@ -277,6 +291,7 @@ def _run_auto_session(bridge_dm: str, peer_uids: set, peer_labels: dict, self_ui
                 input=prompt,
                 capture_output=True, text=True,
                 timeout=120,
+                env=_claude_env(),
             )
             out = "\n".join(
                 l for l in r.stdout.splitlines()
@@ -379,6 +394,7 @@ def _run_collab_session(workdir: str, bridge_dm: str, peer_uids: set, peer_label
                 capture_output=True, text=True,
                 timeout=CLAUDE_TIMEOUT,
                 cwd=cwd,
+                env=_claude_env(),
             )
             # strip permission-noise lines
             out = "\n".join(

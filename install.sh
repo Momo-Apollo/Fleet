@@ -47,7 +47,7 @@ ok "claude: $CLAUDE_BIN"
 
 PYTHON_BIN=""
 for candidate in \
-    /Library/Frameworks/Python.framework/Versions/3.*/bin/python3 \
+    "/Library/Frameworks/Python.framework/Versions/3.*/bin/python3(N)" \
     /opt/homebrew/bin/python3 \
     /usr/local/bin/python3 \
     /usr/bin/python3 \

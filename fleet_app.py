@@ -107,15 +107,6 @@ import customtkinter as ctk
 # ── Paths ──────────────────────────────────────────────────────────────────────
 FLEET_DIR = Path.home() / ".fleet"
 
-# Set macOS dock icon from the .icns file copied during install
-try:
-    import AppKit as _AppKit
-    _icns = FLEET_DIR / "ApolloFleet.icns"
-    if _icns.exists():
-        _img = _AppKit.NSImage.alloc().initWithContentsOfFile_(str(_icns))
-        _AppKit.NSApplication.sharedApplication().setApplicationIconImage_(_img)
-except Exception:
-    pass
 CONFIG_FILE = FLEET_DIR / "config.json"
 STATUS_DIR = FLEET_DIR / "status"
 AUDIT_LOG = FLEET_DIR / "console-audit.log"
@@ -3841,8 +3832,23 @@ class FleetApp(ctk.CTk):
         self.after(4000, lambda: self.summary.status_lbl.configure(text=""))
 
 
+def _set_dock_icon():
+    # Must run after FleetApp() so Tk owns the NSApplication singleton.
+    # Calling sharedApplication() before Tk init creates a plain NSApplication;
+    # Tk 9 then sends TKApplication-private selectors to it and aborts.
+    try:
+        import AppKit as _AppKit
+        _icns = FLEET_DIR / "ApolloFleet.icns"
+        if _icns.exists():
+            _img = _AppKit.NSImage.alloc().initWithContentsOfFile_(str(_icns))
+            _AppKit.NSApplication.sharedApplication().setApplicationIconImage_(_img)
+    except Exception:
+        pass
+
+
 def main():
     app = FleetApp()
+    _set_dock_icon()
     app.mainloop()
 
 

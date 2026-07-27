@@ -2211,14 +2211,21 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
                     "Do not add 'Sent using Claude' — it is appended automatically."
                 )
                 try:
-                    r = subprocess.run(
+                    proc = subprocess.Popen(
                         [self.CLAUDE_BIN, "--print", "--allowedTools",
                          "mcp__plugin_slack_slack__slack_send_message"],
-                        input=prompt, capture_output=True, text=True, timeout=30,
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True,
+                        start_new_session=True,
                     )
-                    out = self._clean(r.stdout) or "(no output)"
-                except subprocess.TimeoutExpired:
-                    out = "(timed out)"
+                    try:
+                        stdout, _ = proc.communicate(input=prompt, timeout=30)
+                        out = self._clean(stdout) or "(no output)"
+                    except subprocess.TimeoutExpired:
+                        import os, signal as _sig
+                        os.killpg(os.getpgid(proc.pid), _sig.SIGKILL)
+                        proc.communicate()
+                        out = "(timed out)"
                 except Exception as e:
                     out = f"(error: {e})"
             self.after(0, lambda: on_signal_done(out))

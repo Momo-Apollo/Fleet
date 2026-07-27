@@ -272,7 +272,8 @@ def _run_auto_session(bridge_dm: str, peer_uids: set, peer_labels: dict, self_ui
                 return
             prompt = _make_auto_prompt(current_dm, peer_uids, peer_labels, self_uid, self_name)
             r = subprocess.run(
-                [CLAUDE_BIN, "--print", "--allowedTools", SLACK_TOOLS],
+                [CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
+                 "--allowedTools", SLACK_TOOLS],
                 input=prompt,
                 capture_output=True, text=True,
                 timeout=120,

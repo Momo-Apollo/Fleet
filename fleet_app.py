@@ -2212,7 +2212,8 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
                 )
                 try:
                     proc = subprocess.Popen(
-                        [self.CLAUDE_BIN, "--print", "--allowedTools",
+                        [self.CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
+                         "--allowedTools",
                          "mcp__plugin_slack_slack__slack_send_message"],
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE, text=True,

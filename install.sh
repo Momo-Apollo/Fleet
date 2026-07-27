@@ -371,6 +371,15 @@ EOF
     ok "SOUL.md written to $SOUL_FILE"
 fi
 
+CONTEXT_FILE="$HOME/.fleet/FLEET-CONTEXT.md"
+CONTEXT_SRC="$REPO_DIR/FLEET-CONTEXT.md"
+CONTEXT_LINE="@~/.fleet/FLEET-CONTEXT.md"
+
+if [[ -f "$CONTEXT_SRC" ]]; then
+    cp "$CONTEXT_SRC" "$CONTEXT_FILE"
+    ok "FLEET-CONTEXT.md copied to $CONTEXT_FILE"
+fi
+
 if [[ -f "$CLAUDE_MD" ]] && grep -qF "$IDENTITY_LINE" "$CLAUDE_MD"; then
     ok "CLAUDE.md already references SOUL.md — skipping"
 else
@@ -381,10 +390,11 @@ else
         print "  ~/.claude/CLAUDE.md not found — will create with:"
     fi
     print "    $IDENTITY_LINE"
+    print "    $CONTEXT_LINE"
     print ""
     REPLY=$(ask "Patch CLAUDE.md? [y/N]")
     if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-        printf '\n%s\n' "$IDENTITY_LINE" >> "$CLAUDE_MD"
+        printf '\n%s\n%s\n' "$IDENTITY_LINE" "$CONTEXT_LINE" >> "$CLAUDE_MD"
         ok "CLAUDE.md patched"
     else
         warn "CLAUDE.md not patched — agent identity invisible to Claude Code sessions"

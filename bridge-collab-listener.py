@@ -207,6 +207,19 @@ def _slack_token() -> str | None:
     return os.environ.get("SLACK_BOT_TOKEN")
 
 
+def _bot_token() -> str | None:
+    p = Path.home() / ".fleet" / "secrets.json"
+    if p.exists():
+        try:
+            secrets = json.loads(p.read_text())
+            tok = secrets.get("slack_bot_token") or secrets.get("slack_token")
+            if tok:
+                return tok
+        except Exception:
+            pass
+    return os.environ.get("SLACK_BOT_TOKEN")
+
+
 # ── logging ───────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -238,7 +251,7 @@ def _dm_history(limit: int = 25, channel: str = "") -> list:
 
 def _post_message(channel: str, text: str) -> None:
     """Post directly via Slack API — no claude --print round-trip."""
-    token = _slack_token()
+    token = _bot_token()
     if not token:
         log.warning("no Slack token — cannot post message")
         return

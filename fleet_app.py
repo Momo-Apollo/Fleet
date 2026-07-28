@@ -2346,13 +2346,17 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
     def _handle_auto_signal(self, want_on: bool):
         if want_on and not self._auto_active:
             self._auto_active = True
+            self._auto_var.set(True)
             self._auto_stop.clear()
+            _fleet_log(LOGS_DIR / "bridge.log", "AUTO", "on")
             self._auto_lbl.configure(text="⚡ AUTO ON — peer signalled")
             self._status_bar.configure(fg_color="#3B1010")
             threading.Thread(target=self._auto_loop, daemon=True).start()
         elif not want_on and self._auto_active:
             self._auto_active = False
+            self._auto_var.set(False)
             self._auto_stop.set()
+            _fleet_log(LOGS_DIR / "bridge.log", "AUTO", "off")
             self._auto_lbl.configure(text="")
             self._status_bar.configure(fg_color=C_CARD)
 

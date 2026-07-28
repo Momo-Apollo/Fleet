@@ -1887,7 +1887,7 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         p = FLEET_DIR / "secrets.json"
         if p.exists():
             try:
-                tok = json.loads(p.read_text()).get("bot_token")
+                tok = json.loads(p.read_text()).get("slack_bot_token") or json.loads(p.read_text()).get("bot_token")
                 if tok:
                     return tok
             except Exception:

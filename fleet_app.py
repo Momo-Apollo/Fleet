@@ -506,6 +506,26 @@ STATE_LABELS = {
 }
 
 
+def _tk_safe(text: str) -> str:
+    """Strip characters above U+FFFF — Tcl/Tk on Python 3.7 can't handle them."""
+    return "".join(c for c in text if ord(c) <= 0xFFFF)
+
+
+def _center_on_parent(win, parent):
+    """Show a withdrawn CTkToplevel centered over its parent, keeping it on the same display."""
+    win.update_idletasks()
+    m = re.match(r'(\d+)x(\d+)', win.geometry())
+    ww = int(m.group(1)) if m else win.winfo_reqwidth()
+    wh = int(m.group(2)) if m else win.winfo_reqheight()
+    px, py = parent.winfo_rootx(), parent.winfo_rooty()
+    pw, ph = parent.winfo_width(), parent.winfo_height()
+    x = px + (pw - ww) // 2
+    y = py + (ph - wh) // 2
+    win.geometry(f"{ww}x{wh}{x:+d}{y:+d}")
+    win.deiconify()
+    win.lift()
+
+
 class AgentCard(ctk.CTkFrame):
     def __init__(self, parent, agent: dict, on_action, **kwargs):
         super().__init__(parent, corner_radius=8, border_width=1,
@@ -758,6 +778,7 @@ class _FileAttachMixin:
 class ChatWindow(_FileAttachMixin, ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
+        self.withdraw()
         self.title(AGENT_NAME)
         self.geometry("780x600")
         self.minsize(520, 360)
@@ -767,7 +788,7 @@ class ChatWindow(_FileAttachMixin, ctk.CTkToplevel):
         self._proc: subprocess.Popen | None = None
         self._build()
         self.bind("<Escape>", self._interrupt)
-        self.after(50, self.lift)
+        self.after(50, lambda: _center_on_parent(self, parent))
         self.after(100, lambda: self.entry.focus())
 
     def _build(self):
@@ -1002,6 +1023,7 @@ class ChatWindow(_FileAttachMixin, ctk.CTkToplevel):
 class AddAgentDialog(ctk.CTkToplevel):
     def __init__(self, parent, on_save, existing_labels: list):
         super().__init__(parent)
+        self.withdraw()
         self.title("Add Agent")
         self.geometry("500x440")
         self.resizable(False, False)
@@ -1010,7 +1032,7 @@ class AddAgentDialog(ctk.CTkToplevel):
         self.on_save = on_save
         self._existing_labels = existing_labels
         self._build()
-        self.after(50, self.lift)
+        self.after(50, lambda: _center_on_parent(self, parent))
 
     def _build(self):
         ctk.CTkLabel(
@@ -1130,12 +1152,13 @@ class AddAgentDialog(ctk.CTkToplevel):
 class BuiltWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
+        self.withdraw()
         self.title("What We've Built")
         self.geometry("680x620")
         self.minsize(500, 400)
         self.configure(fg_color=C_BG)
         self._build()
-        self.after(50, self.lift)
+        self.after(50, lambda: _center_on_parent(self, parent))
 
     def _build(self):
         agents   = load_config().get("agents", [])
@@ -1202,11 +1225,11 @@ class BuiltWindow(ctk.CTkToplevel):
                           padx=(10, 12), pady=10)
 
                 ctk.CTkLabel(
-                    body, text=name,
+                    body, text=_tk_safe(name),
                     font=("SF Pro Display", 13, "bold"), anchor="w"
                 ).pack(fill="x")
                 ctk.CTkLabel(
-                    body, text=desc,
+                    body, text=_tk_safe(desc),
                     font=("SF Pro Display", 11),
                     text_color=C_MUTED, anchor="w", wraplength=520
                 ).pack(fill="x")
@@ -1223,6 +1246,7 @@ class RosterWindow(ctk.CTkToplevel):
 
     def __init__(self, parent):
         super().__init__(parent)
+        self.withdraw()
         self.title("Bot Roster")
         self.geometry("440x400")
         self.resizable(False, False)
@@ -1232,7 +1256,7 @@ class RosterWindow(ctk.CTkToplevel):
         self._agent_names = self._read_agent_names()
         self._vars: dict = {}
         self._build()
-        self.after(50, self.lift)
+        self.after(50, lambda: _center_on_parent(self, parent))
         self.wm_attributes("-topmost", True)
 
     def _read_agent_names(self) -> dict:
@@ -1570,6 +1594,7 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
 
     def __init__(self, parent):
         super().__init__(parent)
+        self.withdraw()
         self.geometry("720x560")
         self.minsize(500, 380)
         self.configure(fg_color=C_BG)
@@ -1591,7 +1616,7 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         self._compose_frame = 0
         self._proc: subprocess.Popen | None = None
         self._build()
-        self.after(50, self.lift)
+        self.after(50, lambda: _center_on_parent(self, parent))
         self._refresh_history()
         threading.Thread(target=self._poll_loop, daemon=True).start()
         threading.Thread(target=self._load_presence, daemon=True).start()
@@ -2365,6 +2390,7 @@ class PairDialog(ctk.CTkToplevel):
 
     def __init__(self, parent, on_pair):
         super().__init__(parent)
+        self.withdraw()
         self.title("Pair Agent")
         self.geometry("480x360")
         self.minsize(400, 280)
@@ -2374,7 +2400,7 @@ class PairDialog(ctk.CTkToplevel):
         self._selected_set: set[int] = set()
         self._row_frames: list = []
         self._build()
-        self.after(50, self.lift)
+        self.after(50, lambda: _center_on_parent(self, parent))
         self.grab_set()
         threading.Thread(target=self._scan, daemon=True).start()
 
@@ -2857,6 +2883,7 @@ class ResumeDialog(ctk.CTkToplevel):
 
     def __init__(self, parent, on_resume, project_dir: str | None = None):
         super().__init__(parent)
+        self.withdraw()
         self.title("Resume Session")
         self.geometry("640x460")
         self.minsize(480, 300)
@@ -2866,7 +2893,7 @@ class ResumeDialog(ctk.CTkToplevel):
         self._selected_uuid: str | None = None
         self._rows: list[ctk.CTkFrame] = []
         self._build()
-        self.after(50, self.lift)
+        self.after(50, lambda: _center_on_parent(self, parent))
         threading.Thread(target=self._scan, daemon=True).start()
 
     def _build(self):
@@ -3332,6 +3359,7 @@ class SessionPane(_FileAttachMixin, ctk.CTkFrame):
 class PermissionDialog(ctk.CTkToplevel):
     def __init__(self, parent, req: dict, on_done):
         super().__init__(parent)
+        self.withdraw()
         self.title("Permission Request")
         self.geometry("540x340")
         self.resizable(False, False)
@@ -3339,7 +3367,7 @@ class PermissionDialog(ctk.CTkToplevel):
         self._req = req
         self._on_done = on_done
         self._build()
-        self.after(50, self.lift)
+        self.after(50, lambda: _center_on_parent(self, parent))
         self.grab_set()
 
     def _build(self):
@@ -3411,13 +3439,14 @@ class LogViewer(ctk.CTkToplevel):
 
     def __init__(self, parent, title: str, get_path):
         super().__init__(parent)
+        self.withdraw()
         self.title(title)
         self.geometry("720x540")
         self.configure(fg_color=C_BG)
         self._get_path = get_path
         self._after_id = None
         self._build()
-        self.after(50, self.lift)
+        self.after(50, lambda: _center_on_parent(self, parent))
         self._refresh()
 
     def _build(self):
@@ -3465,6 +3494,7 @@ class LogViewer(ctk.CTkToplevel):
 class SessionsWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
+        self.withdraw()
         self.title("Sessions")
         self.geometry("780x620")
         self.minsize(560, 420)
@@ -3478,7 +3508,7 @@ class SessionsWindow(ctk.CTkToplevel):
         self._next_sid = 1
         self._build_shell()
         self._new_session()
-        self.after(50, self.lift)
+        self.after(50, lambda: _center_on_parent(self, parent))
         self.after(200, self._poll_permissions)
         self.bind("<Escape>", self._interrupt)
 

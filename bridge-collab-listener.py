@@ -250,8 +250,8 @@ def _dm_history(limit: int = 25, channel: str = "") -> list:
 
 
 def _post_message(channel: str, text: str) -> None:
-    """Post directly via Slack API — no claude --print round-trip."""
-    token = _bot_token()
+    """Post directly via Slack API using user token — works for DMs and channels with chat:write:user."""
+    token = _slack_token()
     if not token:
         log.warning("no Slack token — cannot post message")
         return
@@ -274,9 +274,25 @@ def _post_message(channel: str, text: str) -> None:
 
 
 def _post_heartbeat() -> None:
-    """Post a presence announcement to #fleet-pairing."""
+    """Post presence to #fleet-pairing using bot token (xoxb-) — bot is a channel member."""
     text = f"::fleet-presence:: agent={_SELF_NAME} human={_SELF_HUMAN} uid={SELF_UID}"
-    _post_message(FLEET_PAIRING_CHANNEL, text)
+    token = _bot_token()
+    if not token:
+        log.warning("heartbeat: no bot token — cannot post to #fleet-pairing")
+        return
+    payload = json.dumps({"channel": FLEET_PAIRING_CHANNEL, "text": text}).encode()
+    req = urllib.request.Request(
+        "https://slack.com/api/chat.postMessage",
+        data=payload,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as resp:
+            data = json.loads(resp.read())
+        if not data.get("ok"):
+            log.warning("heartbeat error: %s", data.get("error"))
+    except Exception as e:
+        log.warning("heartbeat failed: %s", e)
 
 
 def _post_via_claude(text: str, channel: str = "") -> None:

@@ -422,7 +422,9 @@ def _find_open_peer_task(msgs: list, peer_uids: set, peer_labels: dict, self_uid
             return None
 
     # Find timestamps of peers' and self's last signed messages
-    last_peer_ts: float | None = None
+    # Seed with the task message itself — the initial ::collab-task:: counts as the
+    # peer's first message so the session fires immediately without a follow-up.
+    last_peer_ts: float | None = float(msgs[task_idx].get("ts", 0))
     last_self_ts: float | None = None
     for m in post_task:
         text = m.get("text") or ""
@@ -435,8 +437,6 @@ def _find_open_peer_task(msgs: list, peer_uids: set, peer_labels: dict, self_uid
     log.info("detection: task_idx=%s last_peer_ts=%s last_self_ts=%s",
              task_idx, last_peer_ts, last_self_ts)
 
-    if last_peer_ts is None:
-        return None
     if last_self_ts is not None and last_self_ts > last_peer_ts:
         return None
 

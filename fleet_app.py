@@ -1611,6 +1611,7 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         self._collab_workdir = str(Path.home())
         self._auto_stop = threading.Event()
         self._auto_active = False
+        self._opened_at = time.time()
         self._composing = False
         self._compose_id = None
         self._compose_frame = 0
@@ -2103,6 +2104,8 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
                 sentinel = f"::{sn_lower}-auto"
                 want_on = None
                 for m in reversed(msgs):
+                    if float(m.get("ts", 0)) < self._opened_at:
+                        break
                     txt = m.get("text", "")
                     if sentinel in txt:
                         want_on = "state=on" in txt

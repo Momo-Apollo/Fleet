@@ -206,6 +206,102 @@ EOF
         || warn "launchctl bootstrap failed — check $BCL_ERR"
 fi
 
+# ── Phase 5b: fleet memory daemon ────────────────────────────────────────────
+info "Fleet Memory"
+
+FM_LABEL="com.${USER}.fleet-memory"
+FM_PLIST="$HOME/Library/LaunchAgents/${FM_LABEL}.plist"
+FM_LOG="$FLEET_DIR/logs/fleet-memory.log"
+
+cp "$REPO_DIR/fleet_memory.py" "$FLEET_DIR/fleet_memory.py"
+ok "fleet_memory.py copied"
+
+if [[ -f "$FM_PLIST" ]]; then
+    launchctl bootout "gui/$UID/$FM_LABEL" 2>/dev/null || true
+fi
+cat > "$FM_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${FM_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${PYTHON_BIN}</string>
+        <string>${FLEET_DIR}/fleet_memory.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>${FLEET_DIR}</string>
+    <key>StandardOutPath</key>
+    <string>${FM_LOG}</string>
+    <key>StandardErrorPath</key>
+    <string>${FM_LOG}</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+EOF
+launchctl bootstrap "gui/$UID" "$FM_PLIST" \
+    && ok "fleet-memory daemon bootstrapped" \
+    || warn "launchctl bootstrap failed — check $FM_LOG"
+
+"$CLAUDE_BIN" mcp add --transport http --scope user fleet_memory http://127.0.0.1:54321/mcp 2>/dev/null \
+    && ok "fleet_memory registered as user-scope MCP server" \
+    || warn "MCP registration failed — run: claude mcp add --transport http --scope user fleet_memory http://127.0.0.1:54321/mcp"
+
+# ── Phase 5c: pre-compact memory hook ────────────────────────────────────────
+info "Pre-compact memory hook"
+
+mkdir -p "$FLEET_DIR/hooks"
+if [[ -f "$REPO_DIR/hooks/pre-compact-memory.py" ]]; then
+    cp "$REPO_DIR/hooks/pre-compact-memory.py" "$FLEET_DIR/hooks/pre-compact-memory.py"
+    chmod +x "$FLEET_DIR/hooks/pre-compact-memory.py"
+    ok "pre-compact-memory.py copied"
+fi
+
+SETTINGS="$HOME/.claude/settings.json"
+if [[ -f "$SETTINGS" ]]; then
+    if ! grep -q "pre-compact-memory" "$SETTINGS"; then
+        "$PYTHON_BIN" - "$FLEET_DIR" <<'PYEOF2'
+import json, sys
+from pathlib import Path
+
+fleet_dir = sys.argv[1]
+settings_path = Path.home() / ".claude/settings.json"
+hook_cmd = f"/usr/bin/env python3 {fleet_dir}/hooks/pre-compact-memory.py"
+
+with open(settings_path) as f:
+    cfg = json.load(f)
+
+hooks = cfg.setdefault("hooks", {})
+pre_compact = hooks.setdefault("PreCompact", [])
+
+already = any(
+    h.get("type") == "command" and "pre-compact-memory" in h.get("command", "")
+    for entry in pre_compact
+    for h in entry.get("hooks", [])
+)
+if not already:
+    pre_compact.insert(0, {
+        "hooks": [{"type": "command", "command": hook_cmd, "timeout": 120}]
+    })
+    with open(settings_path, "w") as f:
+        json.dump(cfg, f, indent=2)
+    print("  hooked")
+else:
+    print("  already present")
+PYEOF2
+        ok "PreCompact hook added to settings.json"
+    else
+        ok "PreCompact hook already in settings.json — skipping"
+    fi
+else
+    warn "~/.claude/settings.json not found — add PreCompact hook manually"
+fi
+
 # ── Build config.json ─────────────────────────────────────────────────────────
 info "Building config.json"
 
@@ -438,4 +534,6 @@ if [[ -z "$CLAUDE_TOKEN" ]]; then
     print ""
 fi
 
+print "  Fleet memory: ~/.fleet/memory.db (MCP on 127.0.0.1:54321)"
+print ""
 print "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -157,12 +157,16 @@ if not BRIDGE_DM:
 SLACK_TOOLS = (
     "mcp__plugin_slack_slack__slack_read_channel,"
     "mcp__plugin_slack_slack__slack_send_message,"
-    "mcp__plugin_slack_slack__slack_read_thread"
+    "mcp__plugin_slack_slack__slack_read_thread,"
+    "mcp__fleet_memory__memory_search,"
+    "mcp__fleet_memory__memory_write"
 )
 SLACK_TOOLS_WITH_FS = (
     "mcp__plugin_slack_slack__slack_read_channel,"
     "mcp__plugin_slack_slack__slack_send_message,"
     "mcp__plugin_slack_slack__slack_read_thread,"
+    "mcp__fleet_memory__memory_search,"
+    "mcp__fleet_memory__memory_write,"
     "Bash,Edit,Write,Read"
 )
 POLL_INTERVAL   = 60   # seconds between watch-mode polls
@@ -351,6 +355,9 @@ def _make_auto_prompt(bridge_dm: str, peer_uids: set, peer_labels: dict, self_ui
         "3. If the channel's most recent message is from you or a human, output exactly: NO_OP\n"
         f"4. If a reply is genuinely warranted: send a direct, substantive response. "
         f"Sign with ' — {self_name}'. Do NOT add 'Sent using Claude'.\n"
+        "5. Before finishing: call memory_search to check for relevant context, and call "
+        "memory_write to save anything worth keeping across sessions — decisions made, "
+        "patterns noticed, project state, one-liners included. Context matters.\n"
         "When in doubt, NO_OP."
     )
 
@@ -466,6 +473,9 @@ def _make_collab_prompt(workdir: str, bridge_dm: str, peer_uids: set, peer_label
         f"did in the channel. Sign with ' — {self_name}'. Do NOT add 'Sent using Claude'.\n"
         f"4. Never reply to messages that are control signals "
         f"(::collab-task::, ::task complete::, {auto_sentinels}).\n"
+        "5. Use memory_search at the start of each exchange for relevant context. "
+        "Use memory_write to save anything worth keeping — decisions, patterns, "
+        "project state, one-liners. Context matters; save liberally.\n"
         "When in doubt, NO_OP."
     )
 

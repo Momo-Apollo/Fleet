@@ -21,6 +21,11 @@ ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
 import base64 as _base64
 
+try:
+    import fleet_memory as _fleet_memory
+except ImportError:
+    _fleet_memory = None  # type: ignore
+
 _HAS_TKDND = False
 try:
     from tkinterdnd2 import TkinterDnD as _TkDnD, DND_FILES as _DND_FILES
@@ -2718,32 +2723,46 @@ class Session:
 
         work_dir     = os.path.expanduser(cwd.replace(" (home)", "")) if cwd else str(Path.home())
         mcp_cfg_path = FLEET_DIR / f"mcp_cfg_{self._uuid}.json"
+        _mem_running = _fleet_memory is not None and _fleet_memory.is_running()
+        _mem_cfg = FLEET_DIR / "memory_mcp.json"
+
         if self._dangerous:
             cmd = [
                 "/opt/homebrew/bin/claude", "--print",
                 "--output-format", "stream-json", "--verbose",
                 "--dangerously-skip-permissions",
             ]
+            if _mem_running and _mem_cfg.exists():
+                cmd += ["--mcp-config", str(_mem_cfg)]
         else:
             # Proxy tools gate Bash/Edit/Write through Fleet UI; disallow built-ins
-            mcp_cfg_path.write_text(json.dumps({
-                "mcpServers": {
-                    "fleet": {
-                        "type": "stdio",
-                        "command": sys.executable,
-                        "args": [str(FLEET_DIR / "fleet_mcp_gate.py"),
-                                 work_dir],
+            mcp_servers = {
+                "fleet": {
+                    "type": "stdio",
+                    "command": sys.executable,
+                    "args": [str(FLEET_DIR / "fleet_mcp_gate.py"), work_dir],
+                },
+                "plugin_slack_slack": {
+                    "type": "http",
+                    "url": "https://mcp.slack.com/mcp",
+                    "oauth": {
+                        "clientId": "1601185624273.8899143856786",
+                        "callbackPort": 3118,
                     },
-                    "plugin_slack_slack": {
-                        "type": "http",
-                        "url": "https://mcp.slack.com/mcp",
-                        "oauth": {
-                            "clientId": "1601185624273.8899143856786",
-                            "callbackPort": 3118,
-                        },
-                    },
+                },
+            }
+            if _mem_running:
+                mcp_servers["fleet_memory"] = {
+                    "type": "http",
+                    "url": "http://127.0.0.1:{}/mcp".format(_fleet_memory.PORT),
                 }
-            }))
+            mcp_cfg_path.write_text(json.dumps({"mcpServers": mcp_servers}))
+
+            _mem_tools = (
+                ",mcp__fleet_memory__memory_search"
+                ",mcp__fleet_memory__memory_write"
+                ",mcp__fleet_memory__memory_delete"
+            ) if _mem_running else ""
             cmd = [
                 "/opt/homebrew/bin/claude", "--print",
                 "--output-format", "stream-json", "--verbose",
@@ -2752,6 +2771,7 @@ class Session:
                     "mcp__fleet__fleet_bash,mcp__fleet__fleet_edit,mcp__fleet__fleet_write,"
                     "mcp__plugin_slack_slack__slack_send_message,"
                     "mcp__plugin_slack_slack__slack_read_channel"
+                    + _mem_tools
                 ),
                 "--mcp-config", str(mcp_cfg_path),
             ]
@@ -3959,10 +3979,50 @@ def _set_dock_icon():
         pass
 
 
+def _write_memory_mcp_cfg() -> None:
+    cfg = {
+        "mcpServers": {
+            "fleet_memory": {
+                "type": "http",
+                "url": "http://127.0.0.1:{}/mcp".format(_fleet_memory.PORT if _fleet_memory else 54321),
+            }
+        }
+    }
+    try:
+        (FLEET_DIR / "memory_mcp.json").write_text(json.dumps(cfg, indent=2))
+    except Exception:
+        pass
+
+
+def _memory_server_reachable() -> bool:
+    """Return True if fleet_memory daemon is already listening on 127.0.0.1:54321."""
+    import urllib.request, urllib.error
+    try:
+        urllib.request.urlopen(
+            "http://127.0.0.1:54321/health", timeout=1, context=_SSL_CTX
+        )
+        return True
+    except Exception:
+        return False
+
+
 def main():
+    _mem_started_by_fleet = False
+    if _fleet_memory:
+        if _memory_server_reachable():
+            # daemon already has the port — skip start_server to avoid conflict
+            pass
+        else:
+            _fleet_memory.start_server()
+            _mem_started_by_fleet = True
+        _write_memory_mcp_cfg()
+
     app = FleetApp()
     _set_dock_icon()
     app.mainloop()
+
+    if _fleet_memory and _mem_started_by_fleet:
+        _fleet_memory.stop_server()
 
 
 if __name__ == "__main__":

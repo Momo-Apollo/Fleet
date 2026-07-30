@@ -212,16 +212,17 @@ def _slack_token() -> str | None:
 
 
 def _bot_token() -> str | None:
+    """Bot token (xoxb-) only — no user-token fallback."""
     p = Path.home() / ".fleet" / "secrets.json"
     if p.exists():
         try:
-            secrets = json.loads(p.read_text())
-            tok = secrets.get("slack_bot_token") or secrets.get("slack_token")
+            tok = json.loads(p.read_text()).get("slack_bot_token")
             if tok:
                 return tok
         except Exception:
             pass
-    return os.environ.get("SLACK_BOT_TOKEN")
+    val = os.environ.get("SLACK_BOT_TOKEN", "")
+    return val if val.startswith("xoxb-") else None
 
 
 # ── logging ───────────────────────────────────────────────────────────────────
@@ -278,11 +279,11 @@ def _post_message(channel: str, text: str) -> None:
 
 
 def _post_heartbeat() -> None:
-    """Post presence to #fleet-pairing using bot token (xoxb-) — bot is a channel member."""
+    """Post presence to #fleet-pairing — bot token preferred, user token fallback."""
     text = f"::fleet-presence:: agent={_SELF_NAME} human={_SELF_HUMAN} uid={SELF_UID}"
-    token = _bot_token()
+    token = _bot_token() or _slack_token()
     if not token:
-        log.warning("heartbeat: no bot token — cannot post to #fleet-pairing")
+        log.warning("heartbeat: no token configured — cannot post to #fleet-pairing")
         return
     payload = json.dumps({"channel": FLEET_PAIRING_CHANNEL, "text": text}).encode()
     req = urllib.request.Request(
@@ -295,6 +296,8 @@ def _post_heartbeat() -> None:
             data = json.loads(resp.read())
         if not data.get("ok"):
             log.warning("heartbeat error: %s", data.get("error"))
+        else:
+            log.info("heartbeat posted to #fleet-pairing")
     except Exception as e:
         log.warning("heartbeat failed: %s", e)
 

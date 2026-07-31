@@ -302,6 +302,104 @@ def _post_heartbeat() -> None:
         log.warning("heartbeat failed: %s", e)
 
 
+def _check_incoming_pair() -> bool:
+    """Read #fleet-pairing for a ::fleet-pair:: addressed to this agent.
+    If found and different from current config, write config.json and return True."""
+    token = _bot_token() or _slack_token()
+    if not token:
+        return False
+    try:
+        url = f"https://slack.com/api/conversations.history?channel={FLEET_PAIRING_CHANNEL}&limit=50"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as resp:
+            data = json.loads(resp.read())
+        msgs = data.get("messages", [])
+    except Exception as e:
+        log.warning("pair check: fetch failed: %s", e)
+        return False
+
+    cfg_path = Path.home() / ".fleet" / "config.json"
+    try:
+        existing = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    except Exception:
+        existing = {}
+
+    for m in msgs:
+        txt = m.get("text") or ""
+        if "::fleet-pair::" not in txt:
+            continue
+
+        # Parse key=value fields (space-separated, after the sentinel)
+        fields: dict = {}
+        for part in txt.split("::fleet-pair::", 1)[-1].split():
+            if "=" in part:
+                k, _, v = part.partition("=")
+                fields[k] = v
+
+        channel = fields.get("channel", "")
+        if not channel:
+            continue
+
+        mode = fields.get("mode", "")
+
+        if mode == "group":
+            # peers=UID1:Agent1:Human1,UID2:Agent2:Human2
+            peers_raw = fields.get("peers", "")
+            all_peers = []
+            for entry in peers_raw.split(","):
+                parts = entry.split(":")
+                if len(parts) == 3:
+                    all_peers.append({"uid": parts[0], "agent": parts[1], "human": parts[2]})
+            if not any(p["uid"] == SELF_UID for p in all_peers):
+                continue
+            if existing.get("bridge", {}).get("channel") == channel:
+                return False
+
+            # Self is one of the peers; everyone else is a peer from our perspective
+            other_peers = [p for p in all_peers if p["uid"] != SELF_UID]
+            initiator = {"uid": fields.get("initiatorUID", ""),
+                         "agent": fields.get("initiator", ""),
+                         "human": fields.get("initiatorHuman", "")}
+            all_participants = ([initiator] if initiator["uid"] != SELF_UID else []) + \
+                               [p for p in other_peers if p["uid"] != SELF_UID]
+
+            bridge = {
+                "mode":       "group",
+                "channel":    channel,
+                "self_uid":   SELF_UID,
+                "self_name":  _SELF_NAME,
+                "self_human": _SELF_HUMAN,
+                "peers":      all_participants,
+                "peer_uid":   "",
+                "peer_name":  "Group",
+                "peer_human": "",
+            }
+        else:
+            # 1:1 pair — must be addressed to this agent
+            if fields.get("peerUID") != SELF_UID:
+                continue
+            if existing.get("bridge", {}).get("channel") == channel:
+                return False
+
+            bridge = {
+                "channel":    channel,
+                "self_uid":   SELF_UID,
+                "self_name":  _SELF_NAME,
+                "self_human": _SELF_HUMAN,
+                "peer_uid":   fields.get("initiatorUID", ""),
+                "peer_name":  fields.get("initiator", ""),
+                "peer_human": fields.get("initiatorHuman", ""),
+            }
+
+        existing["bridge"] = bridge
+        cfg_path.write_text(json.dumps(existing, indent=2))
+        log.info("incoming pair applied: channel=%s peer=%s mode=%s",
+                 channel, fields.get("initiator"), mode or "1:1")
+        return True
+
+    return False
+
+
 def _post_via_claude(text: str, channel: str = "") -> None:
     ch = channel or BRIDGE_DM
     prompt = (
@@ -593,6 +691,8 @@ def main() -> None:
     no_task_streak = 0
     while True:
         try:
+            # Check #fleet-pairing for incoming pair announcements before loading config
+            _check_incoming_pair()
             # hot-reload config; fall back to last good read on parse error
             fresh = _load_bridge_cfg()
             if fresh:

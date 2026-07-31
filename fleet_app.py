@@ -2600,6 +2600,25 @@ class PairDialog(ctk.CTkToplevel):
                 cfg["bridge"] = bridge
                 cfg_path.write_text(json.dumps(cfg, indent=2))
 
+                # Announce to #fleet-pairing so peer's daemon self-configures
+                try:
+                    pair_text = (
+                        f"::fleet-pair:: "
+                        f"initiatorUID={self_uid} initiator={AGENT_NAME} initiatorHuman={HUMAN_NAME} "
+                        f"peerUID={agent['uid']} peer={agent['agent']} peerHuman={agent['human']} "
+                        f"channel={channel_id}"
+                    )
+                    pair_payload = json.dumps({"channel": FLEET_PAIRING_CHANNEL, "text": pair_text}).encode()
+                    pair_req = urllib.request.Request(
+                        "https://slack.com/api/chat.postMessage",
+                        data=pair_payload,
+                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(pair_req, timeout=10, context=_SSL_CTX):
+                        pass
+                except Exception:
+                    pass
+
                 self.after(0, lambda b=bridge: self._on_pair(b))
                 self.after(0, self.destroy)
             except Exception as e:
@@ -2672,6 +2691,27 @@ class PairDialog(ctk.CTkToplevel):
                         pass
                 cfg["bridge"] = bridge
                 cfg_path.write_text(json.dumps(cfg, indent=2))
+
+                # Announce to #fleet-pairing — one message encoding all peers
+                try:
+                    peers_field = ",".join(
+                        f"{a['uid']}:{a['agent']}:{a['human']}" for a in agents
+                    )
+                    pair_text = (
+                        f"::fleet-pair:: "
+                        f"initiatorUID={self_uid} initiator={AGENT_NAME} initiatorHuman={HUMAN_NAME} "
+                        f"peers={peers_field} channel={channel_id} mode=group"
+                    )
+                    pair_payload = json.dumps({"channel": FLEET_PAIRING_CHANNEL, "text": pair_text}).encode()
+                    pair_req = urllib.request.Request(
+                        "https://slack.com/api/chat.postMessage",
+                        data=pair_payload,
+                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(pair_req, timeout=10, context=_SSL_CTX):
+                        pass
+                except Exception:
+                    pass
 
                 self.after(0, lambda b=bridge: self._on_pair(b))
                 self.after(0, self.destroy)

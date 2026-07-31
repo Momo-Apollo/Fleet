@@ -504,13 +504,6 @@ def _make_auto_prompt(bridge_dm: str, peer_uids: set, peer_labels: dict, self_ui
 
 def _run_auto_session(bridge_dm: str, peer_uids: set, peer_labels: dict, self_uid: str, self_name: str) -> None:
     """Poll and auto-respond until ::selfName-auto state=off:: is detected."""
-    if not _has_claude_token():
-        log.warning("auto-respond: no Claude credential — cannot spawn claude subprocess")
-        _post_message(bridge_dm,
-            f":warning: [{self_name}] Auto-respond unavailable: no Claude credential in "
-            f"`~/.fleet/secrets.json`. Set `anthropic_api_key` (Console API key) or "
-            f"`claude_token` (Pro/Max, `claude setup-token`), then restart the daemon.")
-        return
     log.info("auto-respond session started")
     while True:
         time.sleep(POLL_INTERVAL)

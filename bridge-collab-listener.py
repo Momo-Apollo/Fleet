@@ -85,11 +85,17 @@ def _check_claude_token() -> None:
         return
 
     if not secrets.get("claude_token"):
-        log.warning(
-            "no Claude credential in secrets.json — set `claude_token` (Pro/Max, "
-            "`claude setup-token`) or `anthropic_api_key` (Console). Auto-respond will "
-            "time out until one is present."
-        )
+        if os.environ.get("NODE_EXTRA_CA_CERTS"):
+            log.info(
+                "auth: no explicit credential in secrets.json — Keychain path active "
+                "(NODE_EXTRA_CA_CERTS present; firm-proxy machine)"
+            )
+        else:
+            log.warning(
+                "no Claude credential in secrets.json and NODE_EXTRA_CA_CERTS not set — "
+                "auto-respond may time out. Set `claude_token` (Pro/Max, `claude setup-token`) "
+                "or `anthropic_api_key` (Console) to guarantee headless auth."
+            )
         return
 
     expires_str = secrets.get("claude_token_expires", "")

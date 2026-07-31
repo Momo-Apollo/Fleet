@@ -2601,6 +2601,7 @@ class PairDialog(ctk.CTkToplevel):
                 cfg_path.write_text(json.dumps(cfg, indent=2))
 
                 # Announce to #fleet-pairing so peer's daemon self-configures
+                # Use bot token (same as heartbeat) — user token lacks chat:write on channels
                 try:
                     pair_text = (
                         f"::fleet-pair:: "
@@ -2609,15 +2610,18 @@ class PairDialog(ctk.CTkToplevel):
                         f"channel={channel_id}"
                     )
                     pair_payload = json.dumps({"channel": FLEET_PAIRING_CHANNEL, "text": pair_text}).encode()
+                    _announce_tok = BridgeWindow._bot_token() or token
                     pair_req = urllib.request.Request(
                         "https://slack.com/api/chat.postMessage",
                         data=pair_payload,
-                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                        headers={"Authorization": f"Bearer {_announce_tok}", "Content-Type": "application/json"},
                     )
-                    with urllib.request.urlopen(pair_req, timeout=10, context=_SSL_CTX):
-                        pass
-                except Exception:
-                    pass
+                    with urllib.request.urlopen(pair_req, timeout=10, context=_SSL_CTX) as _r:
+                        _rd = json.loads(_r.read())
+                        if not _rd.get("ok"):
+                            raise ValueError(_rd.get("error", "unknown"))
+                except Exception as _e:
+                    print(f"[bridge] pair announce failed: {_e}", flush=True)
 
                 self.after(0, lambda b=bridge: self._on_pair(b))
                 self.after(0, self.destroy)
@@ -2703,15 +2707,18 @@ class PairDialog(ctk.CTkToplevel):
                         f"peers={peers_field} channel={channel_id} mode=group"
                     )
                     pair_payload = json.dumps({"channel": FLEET_PAIRING_CHANNEL, "text": pair_text}).encode()
+                    _announce_tok = BridgeWindow._bot_token() or token
                     pair_req = urllib.request.Request(
                         "https://slack.com/api/chat.postMessage",
                         data=pair_payload,
-                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                        headers={"Authorization": f"Bearer {_announce_tok}", "Content-Type": "application/json"},
                     )
-                    with urllib.request.urlopen(pair_req, timeout=10, context=_SSL_CTX):
-                        pass
-                except Exception:
-                    pass
+                    with urllib.request.urlopen(pair_req, timeout=10, context=_SSL_CTX) as _r:
+                        _rd = json.loads(_r.read())
+                        if not _rd.get("ok"):
+                            raise ValueError(_rd.get("error", "unknown"))
+                except Exception as _e:
+                    print(f"[bridge] group pair announce failed: {_e}", flush=True)
 
                 self.after(0, lambda b=bridge: self._on_pair(b))
                 self.after(0, self.destroy)

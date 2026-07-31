@@ -426,9 +426,9 @@ def _find_open_peer_task(msgs: list, peer_uids: set, peer_labels: dict, self_uid
 
     post_task = msgs[task_idx + 1:]
 
-    # Explicit close signal — must start the message, not appear mid-prose
     for m in post_task:
-        if (m.get("text") or "").strip().startswith("::task complete::"):
+        txt = m.get("text") or ""
+        if any(line.strip().startswith("::task complete::") for line in txt.splitlines()):
             return None
 
     # Find timestamps of peers' and self's last signed messages
@@ -450,6 +450,45 @@ def _find_open_peer_task(msgs: list, peer_uids: set, peer_labels: dict, self_uid
     if last_self_ts is not None and last_self_ts > last_peer_ts:
         return None
 
+    return task_text
+
+
+def _find_open_self_task(msgs: list, peer_uids: set, peer_labels: dict, self_uid: str, self_name: str) -> str | None:
+    """Returns the ::collab-task:: text if self posted the opener, a peer has since replied,
+    and self hasn't replied yet — Apollo-initiated session awaiting listener takeover."""
+    task_idx = None
+    task_text = None
+    for i, m in enumerate(msgs):
+        if m.get("user") == self_uid and "::collab-task::" in (m.get("text") or ""):
+            task_idx = i
+            task_text = m.get("text") or ""
+    if task_idx is None:
+        return None
+
+    post_task = msgs[task_idx + 1:]
+
+    for m in post_task:
+        txt = m.get("text") or ""
+        if any(line.strip().startswith("::task complete::") for line in txt.splitlines()):
+            return None
+
+    last_peer_ts: float | None = None
+    last_self_ts: float | None = None
+    for m in post_task:
+        text = m.get("text") or ""
+        ts = float(m.get("ts", 0))
+        if m.get("user") in peer_uids and any(f"— {name}" in text for name in peer_labels.values()):
+            last_peer_ts = ts
+        if m.get("user") == self_uid and f"— {self_name}" in text:
+            last_self_ts = ts
+
+    if last_peer_ts is None:
+        return None
+
+    if last_self_ts is not None and last_self_ts > last_peer_ts:
+        return None
+
+    log.info("self-task detection: peer replied, self has not — takeover triggered")
     return task_text
 
 
@@ -571,15 +610,22 @@ def main() -> None:
                 continue
 
             msgs = _dm_history(limit=25, channel=bridge_dm)
-            task_text = _find_open_peer_task(msgs, peer_uids, peer_labels, self_uid, self_name)
-            if task_text is not None:
+            peer_task = _find_open_peer_task(msgs, peer_uids, peer_labels, self_uid, self_name)
+            self_task = _find_open_self_task(msgs, peer_uids, peer_labels, self_uid, self_name)
+            if peer_task is not None:
                 no_task_streak = 0
-                workdir = _parse_workdir(task_text)
-                log.info("open collab task detected — workdir=%s", workdir)
+                workdir = _parse_workdir(peer_task)
+                log.info("open collab task detected (peer-initiated) — workdir=%s", workdir)
                 _post_message(
                     bridge_dm,
                     f"[{self_name}] Collab session started — workdir: `{workdir}`"
                 )
+                _run_collab_session(workdir, bridge_dm, peer_uids, peer_labels, self_uid, self_name)
+                log.info("collab session ended — resuming watch mode")
+            elif self_task is not None:
+                no_task_streak = 0
+                workdir = _parse_workdir(self_task)
+                log.info("open collab task detected (self-initiated, peer replied) — taking over — workdir=%s", workdir)
                 _run_collab_session(workdir, bridge_dm, peer_uids, peer_labels, self_uid, self_name)
                 log.info("collab session ended — resuming watch mode")
             else:

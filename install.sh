@@ -1,6 +1,7 @@
 #!/bin/zsh
 # Fleet — agent-agnostic install script
 # Run from the repo root:  ./install.sh
+[ -n "$ZSH_VERSION" ] || { echo "install.sh requires zsh — run ./install.sh or zsh install.sh" >&2; exit 1; }
 set -e
 
 REPO_DIR="${0:A:h}"   # directory containing this script = repo root

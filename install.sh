@@ -112,11 +112,18 @@ ln -sf "$REPO_DIR/fleet_app.py" "$FLEET_DIR/fleet_app.py"
 ok "fleet_app.py symlinked (updates with git pull)"
 
 # Static assets — copied (not symlinked; stable between updates)
-for f in fleet_mcp_gate.py ApolloFleet.icns icon_512.png bridge-collab-listener.py; do
+for f in fleet_mcp_gate.py ApolloFleet.icns icon_512.png; do
     [[ -f "$REPO_DIR/$f" ]] \
         && { cp "$REPO_DIR/$f" "$FLEET_DIR/$f"; ok "copied $f" } \
         || warn "$f not in repo — skipping"
 done
+
+# bridge-collab-listener.py — symlinked like fleet_app.py so git pull auto-updates
+[[ -f "$REPO_DIR/bridge-collab-listener.py" ]] || die "bridge-collab-listener.py not found in $REPO_DIR"
+[[ -L "$FLEET_DIR/bridge-collab-listener.py" ]] && rm "$FLEET_DIR/bridge-collab-listener.py"
+[[ -f "$FLEET_DIR/bridge-collab-listener.py" ]] && { warn "bridge-collab-listener.py exists — backing up"; mv "$FLEET_DIR/bridge-collab-listener.py" "$FLEET_DIR/bridge-collab-listener.py.bak" }
+ln -sf "$REPO_DIR/bridge-collab-listener.py" "$FLEET_DIR/bridge-collab-listener.py"
+ok "bridge-collab-listener.py symlinked (updates with git pull)"
 
 # launch.sh
 cat > "$FLEET_DIR/launch.sh" <<LAUNCH
@@ -199,6 +206,12 @@ else
         ok "plist already exists — reloading"
         launchctl bootout "gui/$UID/$BCL_LABEL" 2>/dev/null || true
     else
+        # Propagate NODE_EXTRA_CA_CERTS when present (firm TLS-intercepting proxy installs)
+        NODE_CA_BLOCK=""
+        if [[ -n "$NODE_EXTRA_CA_CERTS" ]]; then
+            NODE_CA_BLOCK="        <key>NODE_EXTRA_CA_CERTS</key>
+        <string>${NODE_EXTRA_CA_CERTS}</string>"
+        fi
         cat > "$BCL_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -217,6 +230,7 @@ else
         <string>${HOME}</string>
         <key>CLAUDE_BIN</key>
         <string>${CLAUDE_BIN}</string>
+${NODE_CA_BLOCK}
     </dict>
     <key>StandardOutPath</key>
     <string>${BCL_LOG}</string>

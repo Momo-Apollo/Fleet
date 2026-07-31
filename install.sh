@@ -32,12 +32,20 @@ print "  Your name (e.g. Momo, Barrett, Quentin):"
 USER_NAME=$(ask ">")
 [[ -z "$USER_NAME" ]] && die "User name required."
 
-print "  Slack token for Bridge panel (xoxp-... or Enter to skip):"
+print "  Slack USER token for Bridge panel — reads the Bridge DM (xoxp-... or Enter to skip):"
 SLACK_TOKEN=$(ask ">")
 
-print "  Claude OAuth token for auto-respond daemon (requires Claude subscription)."
-print "  Run 'claude setup-token' to generate one, then paste here. Enter to skip."
-CLAUDE_TOKEN=$(ask ">")
+print "  Slack BOT token for the presence heartbeat — posts to #fleet-pairing (xoxb-... or Enter to skip):"
+SLACK_BOT_TOKEN=$(ask ">")
+
+# Either credential is a complete auth path for `claude --print`; there is no
+# Pro-only path. Only the launchd Bridge daemon needs it — a GUI launch inherits
+# the login session's Keychain, launchd does not.
+print "  Claude credential for headless auto-respond — either one works:"
+print "    Pro/Max OAuth token from \`claude setup-token\`  (starts with sk-ant-oat01-...)"
+print "    Console API key, no subscription required       (starts with sk-ant-api03-...)"
+print "  (Enter to skip — the Fleet GUI works without it)"
+CLAUDE_CRED=$(ask ">")
 
 # ── Phase 2: prereqs ──────────────────────────────────────────────────────────
 info "Prerequisites"
@@ -118,23 +126,44 @@ LAUNCH
 chmod +x "$FLEET_DIR/launch.sh"
 ok "launch.sh written"
 
-# secrets.json — tokens (preserves existing keys on re-run)
-if [[ -n "$SLACK_TOKEN" || -n "$CLAUDE_TOKEN" ]]; then
-    SLACK_TOKEN="$SLACK_TOKEN" CLAUDE_TOKEN="$CLAUDE_TOKEN" "$PYTHON_BIN" -c "
-import json, os, pathlib, datetime
-p = pathlib.Path('$FLEET_DIR/secrets.json')
-existing = json.loads(p.read_text()) if p.exists() else {}
-st = os.environ.get('SLACK_TOKEN', '')
-ct = os.environ.get('CLAUDE_TOKEN', '')
-if st: existing['slack_token'] = st
-if ct:
-    existing['claude_token'] = ct
-    existing['claude_token_expires'] = (datetime.date.today() + datetime.timedelta(days=365)).isoformat()
-p.write_text(json.dumps(existing, indent=2))
-"
-    ok "secrets.json written"
+# secrets.json — Slack tokens + Claude credential for the Bridge.
+# MERGE, never clobber. An existing secrets.json can hold keys this run didn't
+# ask about, and a rewrite-from-scratch silently kills the heartbeat or headless
+# auto-respond with no error anywhere.
+if [[ -n "$SLACK_TOKEN" || -n "$SLACK_BOT_TOKEN" || -n "$CLAUDE_CRED" ]]; then
+    SECRETS_PATH="$FLEET_DIR/secrets.json" \
+    SLACK_TOKEN="$SLACK_TOKEN" \
+    SLACK_BOT_TOKEN="$SLACK_BOT_TOKEN" \
+    CLAUDE_CRED="$CLAUDE_CRED" \
+    "$PYTHON_BIN" - <<'PY'
+import json, os, pathlib
+
+p = pathlib.Path(os.environ["SECRETS_PATH"])
+try:
+    data = json.loads(p.read_text())
+    if not isinstance(data, dict):
+        data = {}
+except Exception:
+    data = {}
+
+if os.environ.get("SLACK_TOKEN"):
+    data["slack_token"] = os.environ["SLACK_TOKEN"].strip()
+if os.environ.get("SLACK_BOT_TOKEN"):
+    data["slack_bot_token"] = os.environ["SLACK_BOT_TOKEN"].strip()
+
+cred = os.environ.get("CLAUDE_CRED", "").strip()
+if cred:
+    # sk-ant-api… = Console key -> anthropic_api_key; anything else treated as
+    # the sk-ant-oat01 OAuth token -> claude_token. _claude_creds() in
+    # bridge-collab-listener.py reads both; OAuth wins when both are present.
+    data["anthropic_api_key" if cred.startswith("sk-ant-api") else "claude_token"] = cred
+
+p.write_text(json.dumps(data, indent=2) + "\n")
+p.chmod(0o600)
+PY
+    ok "secrets.json written (0600, existing keys preserved)"
 else
-    warn "No tokens provided — Bridge and auto-respond won't work until tokens are set (see summary)"
+    warn "No tokens given — Bridge panel + auto-respond stay off until you add them (see summary)"
 fi
 
 # ── Phase 4: discover existing skills ────────────────────────────────────────

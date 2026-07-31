@@ -32,17 +32,41 @@ CLAUDE_BIN            = (
     or "claude"
 )
 
-def _claude_env() -> dict:
-    """Return os.environ copy with CLAUDE_CODE_OAUTH_TOKEN injected from secrets.json."""
-    env = os.environ.copy()
+def _claude_creds() -> dict:
+    """Read whichever Claude credential this box has from secrets.json.
+
+    Two auth paths, either is sufficient for `claude --print`:
+      claude_token      -> CLAUDE_CODE_OAUTH_TOKEN (Pro/Max, from `claude setup-token`)
+      anthropic_api_key -> ANTHROPIC_API_KEY       (Console / API-only accounts)
+    """
     p = Path.home() / ".fleet" / "secrets.json"
-    if p.exists():
-        try:
-            tok = json.loads(p.read_text()).get("claude_token", "")
-            if tok:
-                env["CLAUDE_CODE_OAUTH_TOKEN"] = tok
-        except Exception:
-            pass
+    if not p.exists():
+        return {}
+    try:
+        s = json.loads(p.read_text())
+    except Exception:
+        return {}
+    creds = {}
+    if s.get("claude_token"):
+        creds["CLAUDE_CODE_OAUTH_TOKEN"] = s["claude_token"]
+    if s.get("anthropic_api_key"):
+        creds["ANTHROPIC_API_KEY"] = s["anthropic_api_key"]
+    return creds
+
+
+def _claude_env() -> dict:
+    """Return os.environ copy with a Claude credential injected from secrets.json.
+    launchd strips the session environment (no Keychain), so `claude` can't auth and
+    hangs until the timeout — inject the credential so headless auto/collab runs work.
+
+    OAuth wins when both are present. An API key alone is a complete auth path:
+    no Pro subscription, no `claude setup-token`."""
+    env = os.environ.copy()
+    creds = _claude_creds()
+    if "CLAUDE_CODE_OAUTH_TOKEN" in creds:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = creds["CLAUDE_CODE_OAUTH_TOKEN"]
+    elif "ANTHROPIC_API_KEY" in creds:
+        env["ANTHROPIC_API_KEY"] = creds["ANTHROPIC_API_KEY"]
     return env
 
 def _check_claude_token() -> None:
@@ -55,8 +79,17 @@ def _check_claude_token() -> None:
     except Exception:
         return
 
+    if secrets.get("anthropic_api_key") and not secrets.get("claude_token"):
+        # API-key auth has no expiry to police. Nothing to warn about.
+        log.info("auth: ANTHROPIC_API_KEY from secrets.json (no OAuth token configured)")
+        return
+
     if not secrets.get("claude_token"):
-        log.warning("claude_token missing from secrets.json — auto-respond will time out")
+        log.warning(
+            "no Claude credential in secrets.json — set `claude_token` (Pro/Max, "
+            "`claude setup-token`) or `anthropic_api_key` (Console). Auto-respond will "
+            "time out until one is present."
+        )
         return
 
     expires_str = secrets.get("claude_token_expires", "")
@@ -96,14 +129,9 @@ def _check_claude_token() -> None:
 
 
 def _has_claude_token() -> bool:
-    """Return True if a claude_token is present in secrets.json."""
-    p = Path.home() / ".fleet" / "secrets.json"
-    if not p.exists():
-        return False
-    try:
-        return bool(json.loads(p.read_text()).get("claude_token", ""))
-    except Exception:
-        return False
+    """Return True if any Claude credential is present in secrets.json."""
+    creds = _claude_creds()
+    return bool(creds.get("CLAUDE_CODE_OAUTH_TOKEN") or creds.get("ANTHROPIC_API_KEY"))
 
 
 def _is_auth_error(stderr: str) -> bool:
@@ -477,10 +505,11 @@ def _make_auto_prompt(bridge_dm: str, peer_uids: set, peer_labels: dict, self_ui
 def _run_auto_session(bridge_dm: str, peer_uids: set, peer_labels: dict, self_uid: str, self_name: str) -> None:
     """Poll and auto-respond until ::selfName-auto state=off:: is detected."""
     if not _has_claude_token():
-        log.warning("auto-respond: no claude_token — cannot spawn claude subprocess")
+        log.warning("auto-respond: no Claude credential — cannot spawn claude subprocess")
         _post_message(bridge_dm,
-            f":warning: [{self_name}] Auto-respond unavailable: `claude_token` not configured in "
-            f"`~/.fleet/secrets.json`. Run `claude setup-token`, add the token, then restart the daemon.")
+            f":warning: [{self_name}] Auto-respond unavailable: no Claude credential in "
+            f"`~/.fleet/secrets.json`. Set `anthropic_api_key` (Console API key) or "
+            f"`claude_token` (Pro/Max, `claude setup-token`), then restart the daemon.")
         return
     log.info("auto-respond session started")
     while True:

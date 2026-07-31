@@ -95,6 +95,17 @@ def _check_claude_token() -> None:
         log.warning("token warning DM failed: %s", e)
 
 
+def _has_claude_token() -> bool:
+    """Return True if a claude_token is present in secrets.json."""
+    p = Path.home() / ".fleet" / "secrets.json"
+    if not p.exists():
+        return False
+    try:
+        return bool(json.loads(p.read_text()).get("claude_token", ""))
+    except Exception:
+        return False
+
+
 def _is_auth_error(stderr: str) -> bool:
     """Return True if claude subprocess stderr indicates an authentication failure."""
     low = (stderr or "").lower()
@@ -465,6 +476,12 @@ def _make_auto_prompt(bridge_dm: str, peer_uids: set, peer_labels: dict, self_ui
 
 def _run_auto_session(bridge_dm: str, peer_uids: set, peer_labels: dict, self_uid: str, self_name: str) -> None:
     """Poll and auto-respond until ::selfName-auto state=off:: is detected."""
+    if not _has_claude_token():
+        log.warning("auto-respond: no claude_token — cannot spawn claude subprocess")
+        _post_message(bridge_dm,
+            f":warning: [{self_name}] Auto-respond unavailable: `claude_token` not configured in "
+            f"`~/.fleet/secrets.json`. Run `claude setup-token`, add the token, then restart the daemon.")
+        return
     log.info("auto-respond session started")
     while True:
         time.sleep(POLL_INTERVAL)
@@ -481,7 +498,8 @@ def _run_auto_session(bridge_dm: str, peer_uids: set, peer_labels: dict, self_ui
             prompt = _make_auto_prompt(current_dm, peer_uids, peer_labels, self_uid, self_name)
             r = subprocess.run(
                 [CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
-                 "--allowedTools", SLACK_TOOLS],
+                 "--allowedTools", SLACK_TOOLS,
+                 "--disallowedTools", "Bash,Write,Edit,Read"],
                 input=prompt,
                 capture_output=True, text=True,
                 timeout=120,
@@ -503,6 +521,8 @@ def _run_auto_session(bridge_dm: str, peer_uids: set, peer_labels: dict, self_ui
             ).strip()
             if out and out not in ("NO_OP", "TASK_COMPLETE"):
                 log.info("auto-respond: replied")
+        except subprocess.TimeoutExpired as e:
+            log.error("auto-respond: timeout — stdout=%r stderr=%r", e.stdout, e.stderr)
         except Exception as e:
             log.exception("auto-respond error: %s", e)
 
@@ -661,8 +681,9 @@ def _run_collab_session(workdir: str, bridge_dm: str, peer_uids: set, peer_label
             elif out and out != "NO_OP":
                 exchanges += 1
                 log.info("collab: exchange %d/%d responded", exchanges, MAX_EXCHANGES)
-        except subprocess.TimeoutExpired:
-            log.warning("collab: claude timed out after %ds", CLAUDE_TIMEOUT)
+        except subprocess.TimeoutExpired as e:
+            log.warning("collab: claude timed out after %ds — stdout=%r stderr=%r",
+                        CLAUDE_TIMEOUT, e.stdout, e.stderr)
         except Exception as e:
             log.exception("collab: unexpected error: %s", e)
 

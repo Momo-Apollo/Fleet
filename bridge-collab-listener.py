@@ -682,10 +682,6 @@ def main() -> None:
             time.sleep(HEARTBEAT_INTERVAL)
 
     threading.Thread(target=_heartbeat_loop, daemon=True).start()
-    try:
-        _post_heartbeat()
-    except Exception as e:
-        log.warning("initial heartbeat error: %s", e)
 
     _last_cfg = _bridge_cfg
     no_task_streak = 0

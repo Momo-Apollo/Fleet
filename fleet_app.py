@@ -2234,6 +2234,8 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
             self._status_bar.configure(fg_color=C_CARD)
             on_signal_done = lambda _: None
 
+        self._write_bridge_state(auto_active=(state == "on"))
+
         def _post_signals():
             out = "(no output)"
             for peer in peers:
@@ -2266,10 +2268,20 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         threading.Thread(target=_post_signals, daemon=True).start()
 
     @staticmethod
-    def _write_bridge_state(armed: bool) -> None:
+    def _write_bridge_state(armed: bool = None, auto_active: bool = None) -> None:
         try:
             p = Path.home() / ".fleet" / "bridge_state.json"
-            p.write_text(json.dumps({"armed": armed}))
+            state = {}
+            if p.exists():
+                try:
+                    state = json.loads(p.read_text())
+                except Exception:
+                    pass
+            if armed is not None:
+                state["armed"] = armed
+            if auto_active is not None:
+                state["auto_active"] = auto_active
+            p.write_text(json.dumps(state))
         except Exception:
             pass
 

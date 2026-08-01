@@ -477,12 +477,18 @@ def _parse_workdir(task_text: str) -> str:
 
 # ── auto-respond ─────────────────────────────────────────────────────────────
 
-def _detect_auto_signal(msgs: list, self_name: str) -> bool | None:
-    """Return True if most recent ::selfName-auto:: signal is 'on', False if 'off', None if absent."""
+def _detect_auto_signal(msgs: list, self_name: str, since_ts: float = 0.0) -> bool | None:
+    """Return True/False/None for most recent auto-signal newer than since_ts.
+
+    Signals older than since_ts are ignored so stale history entries don't
+    re-trigger auto mode every poll cycle."""
     sentinel = f"::{self_name.lower()}-auto"
     for m in reversed(msgs):
+        ts = float(m.get("ts", 0))
         txt = m.get("text") or ""
         if sentinel in txt:
+            if ts <= since_ts:
+                return None  # already processed or predates daemon start
             return "state=on" in txt
     return None
 
@@ -557,13 +563,17 @@ def _run_auto_session(bridge_dm: str, peer_uids: set, peer_labels: dict, self_ui
 
 # ── detection ─────────────────────────────────────────────────────────────────
 
-def _find_open_peer_task(msgs: list, peer_uids: set, peer_labels: dict, self_uid: str, self_name: str) -> str | None:
+def _find_open_peer_task(msgs: list, peer_uids: set, peer_labels: dict, self_uid: str, self_name: str, since_ts: float = 0.0) -> str | None:
     """Returns the ::collab-task:: message text if there's an open task where
-    a peer's last signed message is newer than this agent's last reply, else None."""
+    a peer's last signed message is newer than this agent's last reply, else None.
+
+    Tasks with a timestamp <= since_ts are ignored (stale pre-daemon-start tasks)."""
     task_idx = None
     task_text = None
     for i, m in enumerate(msgs):
         if m.get("user") in peer_uids and "::collab-task::" in (m.get("text") or ""):
+            if float(m.get("ts", 0)) <= since_ts:
+                continue  # stale — predates daemon start or last collab session
             task_idx = i
             task_text = m.get("text") or ""
     log.info("detection: %d msgs, task_idx=%s", len(msgs), task_idx)
@@ -599,13 +609,17 @@ def _find_open_peer_task(msgs: list, peer_uids: set, peer_labels: dict, self_uid
     return task_text
 
 
-def _find_open_self_task(msgs: list, peer_uids: set, peer_labels: dict, self_uid: str, self_name: str) -> str | None:
+def _find_open_self_task(msgs: list, peer_uids: set, peer_labels: dict, self_uid: str, self_name: str, since_ts: float = 0.0) -> str | None:
     """Returns the ::collab-task:: text if self posted the opener, a peer has since replied,
-    and self hasn't replied yet — Apollo-initiated session awaiting listener takeover."""
+    and self hasn't replied yet — Apollo-initiated session awaiting listener takeover.
+
+    Tasks with a timestamp <= since_ts are ignored (stale pre-daemon-start tasks)."""
     task_idx = None
     task_text = None
     for i, m in enumerate(msgs):
         if m.get("user") == self_uid and "::collab-task::" in (m.get("text") or ""):
+            if float(m.get("ts", 0)) <= since_ts:
+                continue  # stale — predates daemon start or last collab session
             task_idx = i
             task_text = m.get("text") or ""
     if task_idx is None:
@@ -734,6 +748,9 @@ def main() -> None:
 
     _last_cfg = _bridge_cfg
     no_task_streak = 0
+    # Only act on signals (auto or collab) posted after daemon start.
+    # Prevents stale history entries from firing every poll cycle.
+    _since_ts: float = time.time()
     while True:
         try:
             # Check #fleet-pairing for incoming pair announcements before loading config
@@ -754,11 +771,23 @@ def main() -> None:
                 time.sleep(POLL_INTERVAL)
                 continue
 
+            # If the human has auto-toggle ON, they're actively talking to the peer —
+            # daemon stays completely silent. Only collab/auto fire when human is absent.
+            try:
+                _bstate = json.loads((Path.home() / ".fleet" / "bridge_state.json").read_text())
+            except Exception:
+                _bstate = {}
+            if _bstate.get("auto_active"):
+                log.info("watch: human auto-active — daemon idle")
+                time.sleep(POLL_INTERVAL)
+                continue
+
             msgs = _dm_history(limit=25, channel=bridge_dm)
-            peer_task = _find_open_peer_task(msgs, peer_uids, peer_labels, self_uid, self_name)
-            self_task = _find_open_self_task(msgs, peer_uids, peer_labels, self_uid, self_name)
+            peer_task = _find_open_peer_task(msgs, peer_uids, peer_labels, self_uid, self_name, since_ts=_since_ts)
+            self_task = _find_open_self_task(msgs, peer_uids, peer_labels, self_uid, self_name, since_ts=_since_ts)
             if peer_task is not None:
                 no_task_streak = 0
+                _since_ts = time.time()
                 workdir = _parse_workdir(peer_task)
                 log.info("open collab task detected (peer-initiated) — workdir=%s", workdir)
                 _post_message(
@@ -766,22 +795,27 @@ def main() -> None:
                     f"[{self_name}] Collab session started — workdir: `{workdir}`"
                 )
                 _run_collab_session(workdir, bridge_dm, peer_uids, peer_labels, self_uid, self_name)
+                _since_ts = time.time()
                 log.info("collab session ended — resuming watch mode")
             elif self_task is not None:
                 no_task_streak = 0
+                _since_ts = time.time()
                 workdir = _parse_workdir(self_task)
                 log.info("open collab task detected (self-initiated, peer replied) — taking over — workdir=%s", workdir)
                 _run_collab_session(workdir, bridge_dm, peer_uids, peer_labels, self_uid, self_name)
+                _since_ts = time.time()
                 log.info("collab session ended — resuming watch mode")
             else:
                 log.info("auto check: ch=%s n=%d has_sentinel=%s",
                          bridge_dm, len(msgs),
                          any(f"::{self_name.lower()}-auto" in (m.get("text") or "")
                              for m in msgs))
-                want_auto = _detect_auto_signal(msgs, self_name)
+                want_auto = _detect_auto_signal(msgs, self_name, since_ts=_since_ts)
                 if want_auto is True:
+                    _since_ts = time.time()
                     log.info("auto-respond signal detected — entering auto session")
                     _run_auto_session(bridge_dm, peer_uids, peer_labels, self_uid, self_name)
+                    _since_ts = time.time()  # ignore any signal posted during the session
                     log.info("auto session ended — resuming watch mode")
                 else:
                     no_task_streak += 1

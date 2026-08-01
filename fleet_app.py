@@ -1617,6 +1617,7 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         self._auto_stop = threading.Event()
         self._auto_active = False
         self._opened_at = time.time()
+        self._write_bridge_state(auto_active=False)  # clear stale flag on window open
         self._composing = False
         self._compose_id = None
         self._compose_frame = 0

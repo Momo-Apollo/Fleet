@@ -21,7 +21,8 @@ from pathlib import Path
 # ── config ────────────────────────────────────────────────────────────────────
 
 FLEET_PAIRING_CHANNEL = "C0BK59E8XLZ"
-HEARTBEAT_INTERVAL    = 300   # 5 minutes
+HEARTBEAT_INTERVAL         = 300   # 5 minutes (weekdays)
+HEARTBEAT_INTERVAL_WEEKEND = 3600  # 1 hour (weekends)
 CLAUDE_BIN            = (
     os.environ.get("CLAUDE_BIN")
     or next((p for p in [
@@ -742,7 +743,8 @@ def main() -> None:
                 _post_heartbeat()
             except Exception as e:
                 log.warning("heartbeat error: %s", e)
-            time.sleep(HEARTBEAT_INTERVAL)
+            interval = HEARTBEAT_INTERVAL_WEEKEND if time.localtime().tm_wday >= 5 else HEARTBEAT_INTERVAL
+            time.sleep(interval)
 
     threading.Thread(target=_heartbeat_loop, daemon=True).start()
 

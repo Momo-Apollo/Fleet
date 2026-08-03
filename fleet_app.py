@@ -2167,6 +2167,41 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         if self._composing and self._last_sender(text) == self._bridge["peer_name"]:
             self._stop_composing()
 
+    def _post_text(self, text: str, on_done=None) -> None:
+        """Post a plain string to the Bridge channel via chat.postMessage.
+
+        Text posts don't need a model. Routing them through `claude --print`
+        left the UI disabled for the whole subprocess round trip (up to the
+        120s _claude timeout), and the Slack plugin's OAuth can't complete
+        headlessly anyway — same reasoning as _post_signals.
+        """
+        ch = self._bridge["channel"]
+
+        def run():
+            out = "ok"
+            tok = BridgeWindow._slack_token() or BridgeWindow._bot_token()
+            if not tok:
+                out = "(error: no Slack token in ~/.fleet/secrets.json)"
+            else:
+                payload = json.dumps({"channel": ch, "text": text}).encode()
+                req = urllib.request.Request(
+                    "https://slack.com/api/chat.postMessage",
+                    data=payload,
+                    headers={"Authorization": f"Bearer {tok}",
+                             "Content-Type": "application/json"},
+                )
+                try:
+                    with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+                        result = json.loads(resp.read())
+                    if not result.get("ok"):
+                        out = f"(error: {result.get('error')})"
+                except Exception as e:
+                    out = f"(error: {e})"
+            if on_done is not None:
+                self.after(0, lambda: on_done(out))
+
+        threading.Thread(target=run, daemon=True).start()
+
     def _send(self):
         msg = self._entry.get().strip()
         if not msg:
@@ -2186,12 +2221,7 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         if self._collab_armed and not self._collab_active:
             self._collab_workdir = self._parse_workdir(msg)
             sentinel = f"::collab-task:: {msg} — {sn}"
-            collab_prompt = (
-                f'Send this exact message to Slack DM channel {ch}: '
-                f'"{sentinel}"\n'
-                "Do not add 'Sent using Claude' — it is appended automatically."
-            )
-            def on_collab_started(_text):
+            def on_collab_started(_out):
                 self._collab_active = True
                 self._collab_exchanges = 0
                 self._collab_stop.clear()
@@ -2200,7 +2230,7 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
                 self._set_status("Collab session running…")
                 self._refresh_history()
                 threading.Thread(target=self._collab_loop, daemon=True).start()
-            self._claude(collab_prompt, on_collab_started)
+            self._post_text(sentinel, on_collab_started)
             return
 
         _IMG_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'}
@@ -2228,20 +2258,16 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
                 daemon=True,
             ).start()
 
-        prompt = (
-            f"Send this exact message to Slack DM channel {ch}:\n"
-            f"{full_msg}\n"
-            "Do not add 'Sent using Claude' — it is appended automatically."
-        )
-
-        def on_result(_text):
+        def on_result(out):
             self._entry.configure(state="normal")
             self._send_btn.configure(state="normal", text="Send")
             self._entry.focus()
             self._start_composing()
             self._refresh_history()
+            if isinstance(out, str) and out.startswith("(error"):
+                self._set_status(f"Send failed: {out}")
 
-        self._claude(prompt, on_result)
+        self._post_text(full_msg, on_result)
 
     def _on_auto_toggle(self):
         ch = self._bridge["channel"]
@@ -2326,7 +2352,6 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
             self._stop_collab()
 
     def _stop_collab(self):
-        ch = self._bridge["channel"]
         sn = self._bridge["self_name"]
         was_active = self._collab_active
         self._collab_armed = False
@@ -2340,12 +2365,7 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         self._entry.configure(state="normal", placeholder_text=f"Message {self._bridge['peer_name']}…")
         self._send_btn.configure(state="normal", text="Send")
         if was_active:
-            close_prompt = (
-                f'Send this exact message to Slack DM channel {ch}: '
-                f'"::task complete:: — {sn}"\n'
-                "Do not add 'Sent using Claude' — it is appended automatically."
-            )
-            self._claude(close_prompt, lambda _: self._refresh_history())
+            self._post_text(f"::task complete:: — {sn}", lambda _: self._refresh_history())
 
     def _open_pair(self):
         if hasattr(self, "_pair_win") and self._pair_win.winfo_exists():

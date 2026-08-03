@@ -133,6 +133,14 @@ LAUNCH
 chmod +x "$FLEET_DIR/launch.sh"
 ok "launch.sh written"
 
+# fleet command — symlink into ~/.local/bin so `fleet` works from any terminal
+mkdir -p "$HOME/.local/bin"
+ln -sf "$FLEET_DIR/launch.sh" "$HOME/.local/bin/fleet"
+ok "fleet command → ~/.local/bin/fleet"
+if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    warn "~/.local/bin is not in PATH — add it to your shell profile to use the 'fleet' command"
+fi
+
 # .app bundle — gives Fleet a persistent Dock icon and a real bundle identity
 APP_DIR="$HOME/Applications/Fleet.app"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"

@@ -625,7 +625,7 @@ if [[ -z "$SLACK_TOKEN" ]]; then
     print ""
 fi
 
-if [[ -z "$CLAUDE_TOKEN" ]]; then
+if [[ -z "$CLAUDE_CRED" ]]; then
     print "  ⚠ Auto-respond needs a Claude subscription token:"
     print "    1. claude setup-token"
     print "    2. Add to ~/.fleet/secrets.json:  \"claude_token\": \"sk-ant-oat01-...\""

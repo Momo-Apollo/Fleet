@@ -2271,30 +2271,25 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
 
         def _post_signals():
             out = "(no output)"
+            tok = BridgeWindow._slack_token() or BridgeWindow._bot_token()
+            if not tok:
+                out = "(error: no Slack token in ~/.fleet/secrets.json)"
+                self.after(0, lambda: on_signal_done(out))
+                return
             for peer in peers:
                 pn = peer["agent"]
                 msg = f"::{pn.lower()}-auto state={state} from={HUMAN_NAME.lower()}::"
-                prompt = (
-                    f'Send this exact message to Slack channel {ch}: "{msg}"\n'
-                    "Do not add 'Sent using Claude' — it is appended automatically."
+                payload = json.dumps({"channel": ch, "text": msg}).encode()
+                req = urllib.request.Request(
+                    "https://slack.com/api/chat.postMessage",
+                    data=payload,
+                    headers={"Authorization": f"Bearer {tok}",
+                             "Content-Type": "application/json"},
                 )
                 try:
-                    proc = subprocess.Popen(
-                        [self.CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
-                         "--allowedTools",
-                         "mcp__plugin_slack_slack__slack_send_message"],
-                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE, text=True,
-                        start_new_session=True,
-                    )
-                    try:
-                        stdout, _ = proc.communicate(input=prompt, timeout=30)
-                        out = self._clean(stdout) or "(no output)"
-                    except subprocess.TimeoutExpired:
-                        import os, signal as _sig
-                        os.killpg(os.getpgid(proc.pid), _sig.SIGKILL)
-                        proc.communicate()
-                        out = "(timed out)"
+                    with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+                        result = json.loads(resp.read())
+                    out = "ok" if result.get("ok") else f"(error: {result.get('error')})"
                 except Exception as e:
                     out = f"(error: {e})"
             self.after(0, lambda: on_signal_done(out))

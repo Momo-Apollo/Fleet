@@ -4066,7 +4066,58 @@ def _memory_server_reachable() -> bool:
         return False
 
 
+def _ensure_app_bundle() -> None:
+    """Create ~/Applications/Fleet.app on first launch if it doesn't exist."""
+    import stat, shutil, subprocess
+    app = Path.home() / "Applications" / "Fleet.app"
+    if app.exists():
+        return
+    try:
+        macos = app / "Contents" / "MacOS"
+        res   = app / "Contents" / "Resources"
+        macos.mkdir(parents=True, exist_ok=True)
+        res.mkdir(parents=True, exist_ok=True)
+
+        (app / "Contents" / "Info.plist").write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'
+            ' "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+            '<plist version="1.0">\n<dict>\n'
+            '    <key>CFBundleExecutable</key><string>Fleet</string>\n'
+            '    <key>CFBundleIdentifier</key><string>com.fleet.app</string>\n'
+            '    <key>CFBundleName</key><string>Fleet</string>\n'
+            '    <key>CFBundleDisplayName</key><string>Fleet</string>\n'
+            '    <key>CFBundleIconFile</key><string>ApolloFleet</string>\n'
+            '    <key>CFBundlePackageType</key><string>APPL</string>\n'
+            '    <key>CFBundleVersion</key><string>1.0</string>\n'
+            '    <key>CFBundleShortVersionString</key><string>1.0</string>\n'
+            '    <key>LSMinimumSystemVersion</key><string>11.0</string>\n'
+            '    <key>NSHighResolutionCapable</key><true/>\n'
+            '    <key>NSSupportsAutomaticGraphicsSwitching</key><true/>\n'
+            '</dict>\n</plist>\n'
+        )
+
+        launcher = macos / "Fleet"
+        launcher.write_text('#!/bin/zsh\nexec "$HOME/.fleet/launch.sh"\n')
+        launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+        icns_src = FLEET_DIR / "ApolloFleet.icns"
+        if icns_src.exists():
+            shutil.copy2(icns_src, res / "ApolloFleet.icns")
+
+        _lsr = Path(
+            "/System/Library/Frameworks/CoreServices.framework"
+            "/Versions/A/Frameworks/LaunchServices.framework"
+            "/Versions/A/Support/lsregister"
+        )
+        if _lsr.exists():
+            subprocess.run([str(_lsr), "-f", str(app)], capture_output=True, timeout=10)
+    except Exception:
+        pass  # never block startup
+
+
 def main():
+    _ensure_app_bundle()
     _mem_started_by_fleet = False
     if _fleet_memory:
         if _memory_server_reachable():

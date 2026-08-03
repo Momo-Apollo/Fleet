@@ -133,6 +133,51 @@ LAUNCH
 chmod +x "$FLEET_DIR/launch.sh"
 ok "launch.sh written"
 
+# .app bundle — gives Fleet a persistent Dock icon and a real bundle identity
+APP_DIR="$HOME/Applications/Fleet.app"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+
+cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>Fleet</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.fleet.app</string>
+    <key>CFBundleName</key>
+    <string>Fleet</string>
+    <key>CFBundleDisplayName</key>
+    <string>Fleet</string>
+    <key>CFBundleIconFile</key>
+    <string>ApolloFleet</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+
+cat > "$APP_DIR/Contents/MacOS/Fleet" <<EXEC
+#!/bin/zsh
+exec "$FLEET_DIR/launch.sh"
+EXEC
+chmod +x "$APP_DIR/Contents/MacOS/Fleet"
+
+[[ -f "$REPO_DIR/ApolloFleet.icns" ]] && cp "$REPO_DIR/ApolloFleet.icns" "$APP_DIR/Contents/Resources/ApolloFleet.icns"
+/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "$APP_DIR" 2>/dev/null || true
+ok ".app bundle → $APP_DIR"
+
 # secrets.json — Slack tokens + Claude credential for the Bridge.
 # MERGE, never clobber. An existing secrets.json can hold keys this run didn't
 # ask about, and a rewrite-from-scratch silently kills the heartbeat or headless
@@ -561,7 +606,8 @@ print ""
 print "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 printf "  Done.  %s / %s\n" "$AGENT_NAME" "$USER_NAME"
 print ""
-print "  Launch:  $FLEET_DIR/launch.sh"
+print "  Launch:  $HOME/Applications/Fleet.app  (drag to Dock for a persistent launcher)"
+print "           or: $FLEET_DIR/launch.sh"
 print "  Updates: git pull in $REPO_DIR (symlink picks up changes on next launch)"
 print ""
 

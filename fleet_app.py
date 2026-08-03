@@ -117,7 +117,14 @@ STATUS_DIR = FLEET_DIR / "status"
 AUDIT_LOG = FLEET_DIR / "console-audit.log"
 LOGS_DIR = FLEET_DIR / "logs"
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
-FLEET_PAIRING_CHANNEL = "C0BK59E8XLZ"
+def _cfg_pairing_channel() -> str:
+    try:
+        data = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
+        return data.get("fleet_pairing_channel", "") or "C0BK59E8XLZ"
+    except Exception:
+        return "C0BK59E8XLZ"
+
+FLEET_PAIRING_CHANNEL = _cfg_pairing_channel()
 # Repo root — resolved through the symlink so git pull lands in the right place
 _REPO_DIR = Path(__file__).resolve().parent
 # Roster paths — read from config.json; None if not configured
@@ -1505,7 +1512,15 @@ class RosterWindow(ctk.CTkToplevel):
 class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
     """Agent-to-agent chat panel, using a Slack DM as transport."""
 
-    CLAUDE_BIN = "/opt/homebrew/bin/claude"
+    CLAUDE_BIN = (
+        os.environ.get("CLAUDE_BIN")
+        or next((p for p in [
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+            os.path.expanduser("~/.local/bin/claude"),
+        ] if os.path.isfile(p)), None)
+        or "claude"
+    )
     _SLACK_TOOLS = (
         "mcp__plugin_slack_slack__slack_read_channel,"
         "mcp__plugin_slack_slack__slack_send_message,"
@@ -2296,6 +2311,10 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         self._write_bridge_state(auto_active=(state == "on"))
 
         def _post_signals():
+            tok = BridgeWindow._slack_token()
+            if not tok:
+                self.after(0, lambda: on_signal_done("(no Slack token — add slack_token to ~/.fleet/secrets.json)"))
+                return
             out = "(no output)"
             tok = BridgeWindow._slack_token() or BridgeWindow._bot_token()
             if not tok:
@@ -2305,17 +2324,18 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
             for peer in peers:
                 pn = peer["agent"]
                 msg = f"::{pn.lower()}-auto state={state} from={HUMAN_NAME.lower()}::"
-                payload = json.dumps({"channel": ch, "text": msg}).encode()
-                req = urllib.request.Request(
-                    "https://slack.com/api/chat.postMessage",
-                    data=payload,
-                    headers={"Authorization": f"Bearer {tok}",
-                             "Content-Type": "application/json"},
-                )
                 try:
+                    req = urllib.request.Request(
+                        "https://slack.com/api/chat.postMessage",
+                        data=json.dumps({"channel": ch, "text": msg}).encode(),
+                        headers={
+                            "Authorization": f"Bearer {tok}",
+                            "Content-Type": "application/json",
+                        },
+                    )
                     with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
                         result = json.loads(resp.read())
-                    out = "ok" if result.get("ok") else f"(error: {result.get('error')})"
+                    out = "ok" if result.get("ok") else result.get("error", "(slack error)")
                 except Exception as e:
                     out = f"(error: {e})"
             self.after(0, lambda: on_signal_done(out))

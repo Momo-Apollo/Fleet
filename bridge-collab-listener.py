@@ -424,6 +424,13 @@ def _check_incoming_pair() -> bool:
             # 1:1 pair — must be addressed to this agent
             if fields.get("peerUID") != SELF_UID:
                 continue
+            # Never pair with ourselves. A stale self-addressed ::fleet-pair::
+            # otherwise points the bridge at our own self-DM, and the
+            # channel-match guard below can't recover from it: restoring the
+            # real channel by hand un-blocks this check and it re-applies.
+            if fields.get("initiatorUID") == SELF_UID:
+                log.warning("pair check: ignoring self-pair (initiator == self) in %s", channel)
+                continue
             if existing.get("bridge", {}).get("channel") == channel:
                 return False
 

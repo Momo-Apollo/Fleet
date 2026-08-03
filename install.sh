@@ -362,13 +362,14 @@ fi
 SETTINGS="$HOME/.claude/settings.json"
 if [[ -f "$SETTINGS" ]]; then
     if ! grep -q "pre-compact-memory" "$SETTINGS"; then
-        "$PYTHON_BIN" - "$FLEET_DIR" <<'PYEOF2'
+        "$PYTHON_BIN" - "$FLEET_DIR" "$PYTHON_BIN" <<'PYEOF2'
 import json, sys
 from pathlib import Path
 
-fleet_dir = sys.argv[1]
+fleet_dir  = sys.argv[1]
+python_bin = sys.argv[2]
 settings_path = Path.home() / ".claude/settings.json"
-hook_cmd = f"/usr/bin/env python3 {fleet_dir}/hooks/pre-compact-memory.py"
+hook_cmd = f"{python_bin} {fleet_dir}/hooks/pre-compact-memory.py"
 
 with open(settings_path) as f:
     cfg = json.load(f)

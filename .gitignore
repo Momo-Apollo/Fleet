@@ -1,0 +1,7 @@
+# Python bytecode — generated whenever the daemons run out of the working tree
+# (fleet_app.py and bridge-collab-listener.py are symlinked into ~/.fleet)
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store

@@ -1512,7 +1512,15 @@ class RosterWindow(ctk.CTkToplevel):
 class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
     """Agent-to-agent chat panel, using a Slack DM as transport."""
 
-    CLAUDE_BIN = "/opt/homebrew/bin/claude"
+    CLAUDE_BIN = (
+        os.environ.get("CLAUDE_BIN")
+        or next((p for p in [
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+            os.path.expanduser("~/.local/bin/claude"),
+        ] if os.path.isfile(p)), None)
+        or "claude"
+    )
     _SLACK_TOOLS = (
         "mcp__plugin_slack_slack__slack_read_channel,"
         "mcp__plugin_slack_slack__slack_send_message,"

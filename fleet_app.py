@@ -117,7 +117,14 @@ STATUS_DIR = FLEET_DIR / "status"
 AUDIT_LOG = FLEET_DIR / "console-audit.log"
 LOGS_DIR = FLEET_DIR / "logs"
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
-FLEET_PAIRING_CHANNEL = "C0BK59E8XLZ"
+def _cfg_pairing_channel() -> str:
+    try:
+        data = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
+        return data.get("fleet_pairing_channel", "") or "C0BK59E8XLZ"
+    except Exception:
+        return "C0BK59E8XLZ"
+
+FLEET_PAIRING_CHANNEL = _cfg_pairing_channel()
 # Repo root — resolved through the symlink so git pull lands in the right place
 _REPO_DIR = Path(__file__).resolve().parent
 # Roster paths — read from config.json; None if not configured
@@ -2270,31 +2277,26 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         self._write_bridge_state(auto_active=(state == "on"))
 
         def _post_signals():
+            tok = BridgeWindow._slack_token()
+            if not tok:
+                self.after(0, lambda: on_signal_done("(no Slack token — add slack_token to ~/.fleet/secrets.json)"))
+                return
             out = "(no output)"
             for peer in peers:
                 pn = peer["agent"]
                 msg = f"::{pn.lower()}-auto state={state} from={HUMAN_NAME.lower()}::"
-                prompt = (
-                    f'Send this exact message to Slack channel {ch}: "{msg}"\n'
-                    "Do not add 'Sent using Claude' — it is appended automatically."
-                )
                 try:
-                    proc = subprocess.Popen(
-                        [self.CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
-                         "--allowedTools",
-                         "mcp__plugin_slack_slack__slack_send_message"],
-                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE, text=True,
-                        start_new_session=True,
+                    req = urllib.request.Request(
+                        "https://slack.com/api/chat.postMessage",
+                        data=json.dumps({"channel": ch, "text": msg}).encode(),
+                        headers={
+                            "Authorization": f"Bearer {tok}",
+                            "Content-Type": "application/json",
+                        },
                     )
-                    try:
-                        stdout, _ = proc.communicate(input=prompt, timeout=30)
-                        out = self._clean(stdout) or "(no output)"
-                    except subprocess.TimeoutExpired:
-                        import os, signal as _sig
-                        os.killpg(os.getpgid(proc.pid), _sig.SIGKILL)
-                        proc.communicate()
-                        out = "(timed out)"
+                    with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+                        result = json.loads(resp.read())
+                    out = "ok" if result.get("ok") else result.get("error", "(slack error)")
                 except Exception as e:
                     out = f"(error: {e})"
             self.after(0, lambda: on_signal_done(out))

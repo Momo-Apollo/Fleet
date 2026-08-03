@@ -2,5 +2,7 @@
   "agent_name": "Agent",
   "user_name": "Human",
   "refresh_interval_seconds": 10,
+  "roster_file": "",
+  "roster_agents_file": "",
   "agents": []
 }

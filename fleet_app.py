@@ -116,13 +116,24 @@ CONFIG_FILE = FLEET_DIR / "config.json"
 STATUS_DIR = FLEET_DIR / "status"
 AUDIT_LOG = FLEET_DIR / "console-audit.log"
 LOGS_DIR = FLEET_DIR / "logs"
-LOGS_DIR.mkdir(exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 FLEET_PAIRING_CHANNEL = "C0BK59E8XLZ"
 # Repo root — resolved through the symlink so git pull lands in the right place
 _REPO_DIR = Path(__file__).resolve().parent
-# Support-bot roster
-ROSTER_FILE        = Path.home() / "projects" / "tt-support-bot" / "roster.json"
-ROSTER_AGENTS_FILE = Path.home() / "projects" / "tt-support-bot" / "config" / "agents.json"
+# Roster paths — read from config.json; None if not configured
+def _cfg_roster_paths():
+    try:
+        data = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
+        rf  = data.get("roster_file", "")
+        raf = data.get("roster_agents_file", "")
+        return (
+            Path(os.path.expanduser(rf)) if rf else None,
+            Path(os.path.expanduser(raf)) if raf else None,
+        )
+    except Exception:
+        return None, None
+
+ROSTER_FILE, ROSTER_AGENTS_FILE = _cfg_roster_paths()
 
 
 def _fleet_log(path: Path, tag: str, text: str) -> None:
@@ -324,7 +335,7 @@ def expand(p: str | None) -> Path | None:
 
 
 def _load_roster() -> dict:
-    if ROSTER_FILE.exists():
+    if ROSTER_FILE and ROSTER_FILE.exists():
         try:
             with open(ROSTER_FILE) as f:
                 return json.load(f)
@@ -334,13 +345,13 @@ def _load_roster() -> dict:
 
 
 def _load_roster_agents() -> list:
-    if ROSTER_AGENTS_FILE.exists():
+    if ROSTER_AGENTS_FILE and ROSTER_AGENTS_FILE.exists():
         try:
             with open(ROSTER_AGENTS_FILE) as f:
                 return list(json.load(f).get("agents", {}).keys())
         except Exception:
             pass
-    return ["barrett", "momo", "quentin"]
+    return []
 
 
 # ── launchctl wrapper ──────────────────────────────────────────────────────────
@@ -1265,7 +1276,7 @@ class RosterWindow(ctk.CTkToplevel):
         self.wm_attributes("-topmost", True)
 
     def _read_agent_names(self) -> dict:
-        if ROSTER_AGENTS_FILE.exists():
+        if ROSTER_AGENTS_FILE and ROSTER_AGENTS_FILE.exists():
             try:
                 with open(ROSTER_AGENTS_FILE) as f:
                     return {k: v.get("agent_name", k)
@@ -1298,6 +1309,26 @@ class RosterWindow(ctk.CTkToplevel):
         ctk.CTkLabel(
             hdr, text="Bot Roster", font=("SF Pro Display", 15, "bold")
         ).pack(side="left", padx=14, pady=10)
+
+        if ROSTER_FILE is None:
+            ctk.CTkLabel(
+                self,
+                text="Roster not configured.\n\nAdd roster_file and roster_agents_file\nto ~/.fleet/config.json to enable.",
+                font=("SF Pro Display", 13), text_color=C_MUTED, justify="center",
+            ).pack(expand=True)
+            foot = ctk.CTkFrame(self, fg_color=C_HEADER, height=52)
+            foot.pack(fill="x", side="bottom")
+            foot.pack_propagate(False)
+            self._set_btn = ctk.CTkButton(
+                foot, text="Set Roster", width=110, height=36,
+                font=("SF Pro Display", 13, "bold"),
+                fg_color=C_MUTED, state="disabled",
+            )
+            self._set_btn.pack(side="right", padx=(8, 8), pady=8)
+            self._err_lbl = ctk.CTkLabel(foot, text="", font=("SF Pro Display", 11), text_color=C_RED)
+            self._err_lbl.pack(side="right", padx=(0, 8))
+            return
+
         exp_text, exp_color = self._expiry_info()
         self._exp_lbl = ctk.CTkLabel(
             hdr, text=exp_text, font=("SF Pro Mono", 10), text_color=exp_color
@@ -1401,6 +1432,7 @@ class RosterWindow(ctk.CTkToplevel):
             return
         self._err_lbl.configure(text="")
 
+        _set_by = load_config().get("user_name", "agent")
         now     = datetime.now(tz=timezone.utc).astimezone()
         expires = now + timedelta(hours=26)
         new_roster = {
@@ -1409,7 +1441,7 @@ class RosterWindow(ctk.CTkToplevel):
             "primary":    primary,
             "secondary":  secondary,
             "tertiary":   tertiary,
-            "set_by":     "momo",
+            "set_by":     _set_by,
             "set_at":     now.isoformat(timespec="seconds"),
             "expires_at": expires.isoformat(timespec="seconds"),
         }
@@ -1433,7 +1465,7 @@ class RosterWindow(ctk.CTkToplevel):
                 )
                 commit_r = subprocess.run(
                     ["git", "-C", repo, "commit", "-m",
-                     f"roster: {now.strftime('%Y-%m-%d')} set by momo"],
+                     f"roster: {now.strftime('%Y-%m-%d')} set by {_set_by}"],
                     capture_output=True,
                 )
                 if commit_r.returncode == 0:
@@ -1456,7 +1488,7 @@ class RosterWindow(ctk.CTkToplevel):
             exp_text, exp_color = self._expiry_info()
             self._exp_lbl.configure(text=exp_text, text_color=exp_color)
             self._meta_lbl.configure(
-                text=f"set by momo · {now.strftime('%Y-%m-%dT%H:%M')}"
+                text=f"set by {_set_by} · {now.strftime('%Y-%m-%dT%H:%M')}"
             )
 
         def _on_error(msg):

@@ -3949,6 +3949,14 @@ class FleetApp(ctk.CTk):
 
     def _kickstart_bridge_daemon(self):
         try:
+            src = _REPO_DIR / "bridge-collab-listener.py"
+            dst = FLEET_DIR / "bridge-collab-listener.py"
+            if src.exists():
+                import shutil
+                shutil.copy2(src, dst)
+        except Exception:
+            pass
+        try:
             cfg = json.loads((FLEET_DIR / "config.json").read_text())
             label = next(
                 (a["label"] for a in cfg.get("agents", [])

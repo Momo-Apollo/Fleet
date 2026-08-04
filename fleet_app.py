@@ -2554,6 +2554,11 @@ class PairDialog(ctk.CTkToplevel):
                         data = json.loads(resp.read())
             if not data.get("ok"):
                 raise ValueError(data.get("error", "unknown"))
+            try:
+                _cfg = json.loads((FLEET_DIR / "config.json").read_text())
+                self_uid = _cfg.get("bridge", {}).get("self_uid", "")
+            except Exception:
+                self_uid = ""
             now = time.time()
             seen_uids: set = set()
             agents = []
@@ -2570,6 +2575,8 @@ class PairDialog(ctk.CTkToplevel):
                 if not (am and hm and um):
                     continue
                 uid = um.group(1)
+                if self_uid and uid == self_uid:
+                    continue
                 if uid in seen_uids:
                     continue
                 seen_uids.add(uid)
@@ -3940,6 +3947,22 @@ class FleetApp(ctk.CTk):
         # Log panel (hidden)
         self.log_panel = LogPanel(self)
 
+    def _kickstart_bridge_daemon(self):
+        try:
+            cfg = json.loads((FLEET_DIR / "config.json").read_text())
+            label = next(
+                (a["label"] for a in cfg.get("agents", [])
+                 if "bridge-collab-listener" in a.get("label", "")),
+                None
+            )
+            if label:
+                subprocess.run(
+                    ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"],
+                    capture_output=True, timeout=5
+                )
+        except Exception:
+            pass
+
     def _reload_config(self):
         self.summary.status_lbl.configure(text="Pulling…")
         self.update_idletasks()
@@ -3959,6 +3982,7 @@ class FleetApp(ctk.CTk):
 
         if app_updated:
             self.summary.status_lbl.configure(text="Updated — restarting…")
+            self._kickstart_bridge_daemon()
             self.after(1500, lambda: os.execv(sys.executable, [sys.executable] + sys.argv))
             return
 
@@ -3972,6 +3996,7 @@ class FleetApp(ctk.CTk):
             card.pack(fill="x", pady=4)
             self._cards[agent["label"]] = card
         self._refresh()
+        self._kickstart_bridge_daemon()
         self.summary.status_lbl.configure(text="Config reloaded")
         self.after(3000, lambda: self.summary.status_lbl.configure(text=""))
 

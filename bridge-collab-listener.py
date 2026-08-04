@@ -23,6 +23,7 @@ from pathlib import Path
 FLEET_PAIRING_CHANNEL = "C0BK59E8XLZ"
 HEARTBEAT_INTERVAL         = 300   # 5 minutes (weekdays)
 HEARTBEAT_INTERVAL_WEEKEND = 3600  # 1 hour (weekends)
+PAIR_MAX_AGE               = 24 * 3600  # ignore ::fleet-pair:: messages older than 24h
 CLAUDE_BIN            = (
     os.environ.get("CLAUDE_BIN")
     or next((p for p in [
@@ -373,6 +374,8 @@ def _check_incoming_pair() -> bool:
     for m in msgs:
         txt = m.get("text") or ""
         if "::fleet-pair::" not in txt:
+            continue
+        if time.time() - float(m.get("ts", 0)) > PAIR_MAX_AGE:
             continue
 
         # Parse key=value fields (space-separated, after the sentinel)

@@ -19,6 +19,7 @@ _SSL_CTX = ssl._create_unverified_context()
 from datetime import datetime, timezone, timedelta
 ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
+import shutil
 import base64 as _base64
 
 try:
@@ -3952,7 +3953,6 @@ class FleetApp(ctk.CTk):
             src = _REPO_DIR / "bridge-collab-listener.py"
             dst = FLEET_DIR / "bridge-collab-listener.py"
             if src.exists():
-                import shutil
                 shutil.copy2(src, dst)
         except Exception:
             pass

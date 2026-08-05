@@ -310,8 +310,10 @@ FM_LABEL="com.${USER}.fleet-memory"
 FM_PLIST="$HOME/Library/LaunchAgents/${FM_LABEL}.plist"
 FM_LOG="$FLEET_DIR/logs/fleet-memory.log"
 
-cp "$REPO_DIR/fleet_memory.py" "$FLEET_DIR/fleet_memory.py"
-ok "fleet_memory.py copied"
+[[ -L "$FLEET_DIR/fleet_memory.py" ]] && rm "$FLEET_DIR/fleet_memory.py"
+[[ -f "$FLEET_DIR/fleet_memory.py" ]] && { warn "fleet_memory.py exists — backing up"; mv "$FLEET_DIR/fleet_memory.py" "$FLEET_DIR/fleet_memory.py.bak" }
+ln -sf "$REPO_DIR/fleet_memory.py" "$FLEET_DIR/fleet_memory.py"
+ok "fleet_memory.py symlinked (updates with git pull)"
 
 if [[ -f "$FM_PLIST" ]]; then
     launchctl bootout "gui/$UID/$FM_LABEL" 2>/dev/null || true

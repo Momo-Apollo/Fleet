@@ -27,6 +27,12 @@ try:
 except ImportError:
     _fleet_memory = None  # type: ignore
 
+try:
+    import openpyxl as _openpyxl
+    _HAS_OPENPYXL = True
+except ImportError:
+    _HAS_OPENPYXL = False
+
 _HAS_TKDND = False
 try:
     from tkinterdnd2 import TkinterDnD as _TkDnD, DND_FILES as _DND_FILES
@@ -61,35 +67,128 @@ _IMAGE_MEDIA_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".gif": "image/gif", ".webp": "image/webp",
 }
-# Per-file character cap for text attachments (~50KB ≈ 12K tokens).
-_MAX_FILE_CHARS = 50_000
+_SMALL_TEXT_CHARS = 8_000
 
 
-def _build_content_blocks(files: list, text: str) -> list:
-    """Build an Anthropic-API content-block array from local files + a text message."""
+def _file_structural_preview(p: Path) -> str:
+    """Cheap structural summary for tier-3 (large/binary) files."""
+    suffix = p.suffix.lower()
+    try:
+        size = p.stat().st_size
+    except Exception:
+        size = 0
+
+    if suffix in (".xlsx", ".xls") and _HAS_OPENPYXL:
+        try:
+            wb = _openpyxl.load_workbook(str(p), read_only=True, data_only=True)
+            parts = []
+            for ws in wb.worksheets:
+                r, c = ws.max_row, ws.max_column
+                shape = f"{r}×{c}" if (r and c) else "shape unknown"
+                parts.append(f"  '{ws.title}': {shape}")
+            wb.close()
+            return "Excel — {:,} bytes\n{}".format(size, "\n".join(parts) or "  (no sheets)")
+        except Exception as e:
+            return "Excel — {:,} bytes (preview unavailable: {})".format(size, e)
+
+    if suffix in (".csv", ".tsv"):
+        try:
+            with open(p, "rb") as fh:
+                head_raw = fh.read(2048)
+            head = head_raw.decode("utf-8", errors="replace")
+            lines = head.splitlines()
+            header = lines[0] if lines else "(empty)"
+            sample = lines[1:4]
+            with open(p, "rb") as fh:
+                total = sum(1 for _ in fh)
+            result = "CSV — {:,} rows, {:,} bytes\nheader: {}".format(total, size, header)
+            if sample:
+                result += "\nsample rows:\n" + "\n".join(sample)
+            return result
+        except Exception:
+            return "CSV — {:,} bytes".format(size)
+
+    if suffix in (".ndjson", ".jsonl"):
+        try:
+            with open(p, "rb") as fh:
+                first_line = fh.readline().decode("utf-8", errors="replace").strip()
+            with open(p, "rb") as fh:
+                count = sum(1 for _ in fh)
+            result = "NDJSON — {:,} records, {:,} bytes".format(count, size)
+            try:
+                obj = json.loads(first_line)
+                if isinstance(obj, dict):
+                    result += "\nkeys: {}".format(list(obj.keys()))
+            except Exception:
+                pass
+            return result
+        except Exception:
+            return "NDJSON — {:,} bytes".format(size)
+
+    return "{} — {:,} bytes".format(suffix or "file", size)
+
+
+def _build_content_blocks(files: list, text: str, path_accessible: bool = False) -> list:
+    """Build an Anthropic-API content-block array from local files + a text message.
+
+    Tier 1: images            — base64 encoded, unchanged.
+    Tier 2: small text (<8K)  — inlined verbatim.
+    Tier 3: large or binary   — structural preview; if path_accessible (sessions pane),
+                                also emits the absolute path so the agent can read the file
+                                directly with its own tools.
+    """
     blocks = []
     for fpath in files:
-        p = Path(fpath)
+        p = Path(fpath).resolve()
         suffix = p.suffix.lower()
+
+        # Tier 1: images
         media_type = _IMAGE_MEDIA_TYPES.get(suffix)
         if media_type:
             try:
-                with open(fpath, "rb") as fh:
+                with open(p, "rb") as fh:
                     b64 = _base64.b64encode(fh.read()).decode()
                 blocks.append({
                     "type": "image",
                     "source": {"type": "base64", "media_type": media_type, "data": b64},
                 })
             except Exception as e:
-                blocks.append({"type": "text", "text": f"[{p.name}: could not read — {e}]"})
+                blocks.append({"type": "text", "text": "[{}: could not read — {}]".format(p.name, e)})
+            continue
+
+        # Probe for binary content (NUL bytes or non-UTF-8)
+        is_binary = False
+        content = None
+        try:
+            stat_size = p.stat().st_size
+            with open(p, "rb") as fh:
+                probe = fh.read(min(8192, stat_size))
+            if b"\x00" in probe:
+                is_binary = True
+            else:
+                probe.decode("utf-8")  # raises on non-UTF-8
+                if stat_size <= _SMALL_TEXT_CHARS:
+                    content = p.read_bytes().decode("utf-8")
+                # else: large clean text — leave content=None, fall to tier 3
+        except UnicodeDecodeError:
+            is_binary = True
+        except Exception:
+            is_binary = True
+
+        if content is not None:
+            # Tier 2: small text — inline
+            blocks.append({"type": "text", "text": "[{}]\n```\n{}\n```".format(p.name, content)})
         else:
-            try:
-                content = p.read_text(errors="replace")
-                if len(content) > _MAX_FILE_CHARS:
-                    content = content[:_MAX_FILE_CHARS] + f"\n[truncated — showing first {_MAX_FILE_CHARS:,} of {len(content):,} chars]"
-                blocks.append({"type": "text", "text": f"[{p.name}]\n```\n{content}\n```"})
-            except Exception as e:
-                blocks.append({"type": "text", "text": f"[{p.name}: could not read — {e}]"})
+            # Tier 3: large or binary — structural preview
+            preview = _file_structural_preview(p)
+            if path_accessible:
+                msg = "[{} — {}]\nFull file at: {}\nUse Read or Bash to open it directly.".format(
+                    p.name, preview, p
+                )
+            else:
+                msg = "[{} — {}]".format(p.name, preview)
+            blocks.append({"type": "text", "text": msg})
+
     blocks.append({"type": "text", "text": text})
     return blocks
 
@@ -779,7 +878,16 @@ class _FileAttachMixin:
         if img_path:
             self._add_file(img_path)
             return "break"
-        return None
+        try:
+            w = event.widget
+            try:
+                w.delete("sel.first", "sel.last")
+            except Exception:
+                pass
+            w.insert("insert", w.clipboard_get())
+        except Exception:
+            pass
+        return "break"
 
     def _register_drop_target(self, widget):
         if not _HAS_TKDND:
@@ -2905,7 +3013,8 @@ class Session:
                 "--allowedTools", (
                     "mcp__fleet__fleet_bash,mcp__fleet__fleet_edit,mcp__fleet__fleet_write,"
                     "mcp__plugin_slack_slack__slack_send_message,"
-                    "mcp__plugin_slack_slack__slack_read_channel"
+                    "mcp__plugin_slack_slack__slack_read_channel,"
+                    "Read"
                     + _mem_tools
                 ),
                 "--mcp-config", str(mcp_cfg_path),
@@ -2919,7 +3028,7 @@ class Session:
         stdin_data = None
         if files:
             cmd += ["--input-format", "stream-json"]
-            blocks = _build_content_blocks(files, msg)
+            blocks = _build_content_blocks(files, msg, path_accessible=True)
             stdin_data = json.dumps({
                 "type": "user",
                 "message": {"role": "user", "content": blocks},

@@ -19,7 +19,6 @@ _SSL_CTX = ssl._create_unverified_context()
 from datetime import datetime, timezone, timedelta
 ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
-import shutil
 import base64 as _base64
 
 try:
@@ -216,31 +215,13 @@ CONFIG_FILE = FLEET_DIR / "config.json"
 STATUS_DIR = FLEET_DIR / "status"
 AUDIT_LOG = FLEET_DIR / "console-audit.log"
 LOGS_DIR = FLEET_DIR / "logs"
-LOGS_DIR.mkdir(parents=True, exist_ok=True)
-def _cfg_pairing_channel() -> str:
-    try:
-        data = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
-        return data.get("fleet_pairing_channel", "") or "C0BK59E8XLZ"
-    except Exception:
-        return "C0BK59E8XLZ"
-
-FLEET_PAIRING_CHANNEL = _cfg_pairing_channel()
+LOGS_DIR.mkdir(exist_ok=True)
+FLEET_PAIRING_CHANNEL = "C0BK59E8XLZ"
 # Repo root — resolved through the symlink so git pull lands in the right place
 _REPO_DIR = Path(__file__).resolve().parent
-# Roster paths — read from config.json; None if not configured
-def _cfg_roster_paths():
-    try:
-        data = json.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
-        rf  = data.get("roster_file", "")
-        raf = data.get("roster_agents_file", "")
-        return (
-            Path(os.path.expanduser(rf)) if rf else None,
-            Path(os.path.expanduser(raf)) if raf else None,
-        )
-    except Exception:
-        return None, None
-
-ROSTER_FILE, ROSTER_AGENTS_FILE = _cfg_roster_paths()
+# Support-bot roster
+ROSTER_FILE        = Path.home() / "projects" / "tt-support-bot" / "roster.json"
+ROSTER_AGENTS_FILE = Path.home() / "projects" / "tt-support-bot" / "config" / "agents.json"
 
 
 def _fleet_log(path: Path, tag: str, text: str) -> None:
@@ -442,7 +423,7 @@ def expand(p: str | None) -> Path | None:
 
 
 def _load_roster() -> dict:
-    if ROSTER_FILE and ROSTER_FILE.exists():
+    if ROSTER_FILE.exists():
         try:
             with open(ROSTER_FILE) as f:
                 return json.load(f)
@@ -452,13 +433,13 @@ def _load_roster() -> dict:
 
 
 def _load_roster_agents() -> list:
-    if ROSTER_AGENTS_FILE and ROSTER_AGENTS_FILE.exists():
+    if ROSTER_AGENTS_FILE.exists():
         try:
             with open(ROSTER_AGENTS_FILE) as f:
                 return list(json.load(f).get("agents", {}).keys())
         except Exception:
             pass
-    return []
+    return ["barrett", "momo", "quentin"]
 
 
 # ── launchctl wrapper ──────────────────────────────────────────────────────────
@@ -905,6 +886,34 @@ class _FileAttachMixin:
             self._add_file(path)
 
 
+# ── Shared UI helpers ──────────────────────────────────────────────────────────
+
+def _tool_activity_tag(line: str) -> str:
+    l = line.lower()
+    if any(x in l for x in ("bash", "shell", "command", "fleet_bash")):
+        return "act_bash"
+    if any(x in l for x in ("read", "grep", "find", "fetch", "search")):
+        return "act_read"
+    if any(x in l for x in ("edit", "write", "notebook", "fleet_edit", "fleet_write")):
+        return "act_edit"
+    if any(x in l for x in ("skill", "mcp__")):
+        return "act_skill"
+    return "act_default"
+
+
+def _tool_status_color(name: str) -> str:
+    l = name.lower()
+    if any(x in l for x in ("bash", "shell", "fleet_bash")):
+        return "#FFC72C"
+    if any(x in l for x in ("read", "grep", "find", "fetch", "search")):
+        return "#5B9BD5"
+    if any(x in l for x in ("edit", "write", "notebook", "fleet_edit", "fleet_write")):
+        return "#2DC6A0"
+    if any(x in l for x in ("skill", "mcp__")):
+        return "#B088D4"
+    return C_MUTED
+
+
 # ── Chat Window ────────────────────────────────────────────────────────────────
 
 class ChatWindow(_FileAttachMixin, ctk.CTkToplevel):
@@ -930,6 +939,7 @@ class ChatWindow(_FileAttachMixin, ctk.CTkToplevel):
         )
         self.history.pack(fill="both", expand=True, padx=8, pady=(8, 4))
         self.history.configure(state="disabled")
+        self._configure_tags()
 
         self._file_mixin_init()
         self._chips_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -961,6 +971,38 @@ class ChatWindow(_FileAttachMixin, ctk.CTkToplevel):
             command=self._send
         )
         self.send_btn.grid(row=0, column=2)
+
+    def _configure_tags(self):
+        tb = self.history._textbox
+        tb.tag_configure("you_label",    foreground="#C8C5C6", font=("SF Pro Display", 13, "bold"))
+        tb.tag_configure("apollo_label", foreground="#E21E26", font=("SF Pro Display", 13, "bold"))
+        tb.tag_configure("act_bash",     foreground="#FFC72C", font=("SF Pro Mono", 10))
+        tb.tag_configure("act_read",     foreground="#5B9BD5", font=("SF Pro Mono", 10))
+        tb.tag_configure("act_edit",     foreground="#2DC6A0", font=("SF Pro Mono", 10))
+        tb.tag_configure("act_skill",    foreground="#B088D4", font=("SF Pro Mono", 10))
+        tb.tag_configure("act_default",  foreground="#5A5558", font=("SF Pro Mono", 10))
+        tb.tag_configure("separator",    foreground="#3A3336", font=("SF Pro Display", 11))
+
+    def _insert_tagged(self, text: str, tag: str | None = None):
+        """Insert text with optional tag. Does not stop the spinner."""
+        tb = self.history._textbox
+        self.history.configure(state="normal")
+        start = tb.index("end-1c")
+        tb.insert("end", text)
+        if tag:
+            tb.tag_add(tag, start, tb.index("end-1c"))
+        self.history.configure(state="disabled")
+        self.history.see("end")
+
+    def _append_separator(self):
+        sep = "─" * 28 + " ● " + "─" * 28
+        tb = self.history._textbox
+        self.history.configure(state="normal")
+        start = tb.index("end-1c")
+        tb.insert("end", f"\n\n{sep}\n")
+        tb.tag_add("separator", start, tb.index("end-1c"))
+        self.history.configure(state="disabled")
+        self.history.see("end")
 
     _SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -1001,11 +1043,12 @@ class ChatWindow(_FileAttachMixin, ctk.CTkToplevel):
         self.history.see("end")
 
     def _append_activity(self, line: str):
+        tag = _tool_activity_tag(line)
+        tb = self.history._textbox
         self.history.configure(state="normal")
-        self.history._textbox.insert("end", f"  {line}\n", "activity")
-        self.history._textbox.tag_config(
-            "activity", foreground="#4A4547", font=("SF Pro Mono", 10)
-        )
+        start = tb.index("end-1c")
+        tb.insert("end", f"  {line}\n")
+        tb.tag_add(tag, start, tb.index("end-1c"))
         self.history.see("end")
         self.history.configure(state="disabled")
 
@@ -1036,14 +1079,18 @@ class ChatWindow(_FileAttachMixin, ctk.CTkToplevel):
         self._rebuild_chips()
 
         suffix = f"  +{len(files)} file(s)" if files else ""
-        self._append(f"\nYou:  {msg}{suffix}\n\n{AGENT_NAME}:  ")
+        self._insert_tagged("\n")
+        self._insert_tagged("You", "you_label")
+        self._insert_tagged(f"  {msg}{suffix}\n\n")
+        self._insert_tagged(AGENT_NAME, "apollo_label")
+        self._insert_tagged("  ")
         self._start_spinner()
 
         is_first = self._first_message
         self._first_message = False
 
         def run():
-            cmd = ["/opt/homebrew/bin/claude", "--print", "--output-format", "stream-json", "--verbose"]
+            cmd = ["/opt/homebrew/bin/claude", "--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
             if not is_first:
                 cmd.append("--continue")
 
@@ -1143,7 +1190,7 @@ class ChatWindow(_FileAttachMixin, ctk.CTkToplevel):
 
     def _on_done(self):
         self._stop_spinner()
-        self._append("\n\n" + "─" * 72 + "\n")
+        self._append_separator()
         self._busy = False
         self.send_btn.configure(state="normal", text="Send")
         self.entry.configure(state="normal")
@@ -1392,7 +1439,7 @@ class RosterWindow(ctk.CTkToplevel):
         self.wm_attributes("-topmost", True)
 
     def _read_agent_names(self) -> dict:
-        if ROSTER_AGENTS_FILE and ROSTER_AGENTS_FILE.exists():
+        if ROSTER_AGENTS_FILE.exists():
             try:
                 with open(ROSTER_AGENTS_FILE) as f:
                     return {k: v.get("agent_name", k)
@@ -1425,26 +1472,6 @@ class RosterWindow(ctk.CTkToplevel):
         ctk.CTkLabel(
             hdr, text="Bot Roster", font=("SF Pro Display", 15, "bold")
         ).pack(side="left", padx=14, pady=10)
-
-        if ROSTER_FILE is None:
-            ctk.CTkLabel(
-                self,
-                text="Roster not configured.\n\nAdd roster_file and roster_agents_file\nto ~/.fleet/config.json to enable.",
-                font=("SF Pro Display", 13), text_color=C_MUTED, justify="center",
-            ).pack(expand=True)
-            foot = ctk.CTkFrame(self, fg_color=C_HEADER, height=52)
-            foot.pack(fill="x", side="bottom")
-            foot.pack_propagate(False)
-            self._set_btn = ctk.CTkButton(
-                foot, text="Set Roster", width=110, height=36,
-                font=("SF Pro Display", 13, "bold"),
-                fg_color=C_MUTED, state="disabled",
-            )
-            self._set_btn.pack(side="right", padx=(8, 8), pady=8)
-            self._err_lbl = ctk.CTkLabel(foot, text="", font=("SF Pro Display", 11), text_color=C_RED)
-            self._err_lbl.pack(side="right", padx=(0, 8))
-            return
-
         exp_text, exp_color = self._expiry_info()
         self._exp_lbl = ctk.CTkLabel(
             hdr, text=exp_text, font=("SF Pro Mono", 10), text_color=exp_color
@@ -1548,7 +1575,6 @@ class RosterWindow(ctk.CTkToplevel):
             return
         self._err_lbl.configure(text="")
 
-        _set_by = load_config().get("user_name", "agent")
         now     = datetime.now(tz=timezone.utc).astimezone()
         expires = now + timedelta(hours=26)
         new_roster = {
@@ -1557,7 +1583,7 @@ class RosterWindow(ctk.CTkToplevel):
             "primary":    primary,
             "secondary":  secondary,
             "tertiary":   tertiary,
-            "set_by":     _set_by,
+            "set_by":     "momo",
             "set_at":     now.isoformat(timespec="seconds"),
             "expires_at": expires.isoformat(timespec="seconds"),
         }
@@ -1581,7 +1607,7 @@ class RosterWindow(ctk.CTkToplevel):
                 )
                 commit_r = subprocess.run(
                     ["git", "-C", repo, "commit", "-m",
-                     f"roster: {now.strftime('%Y-%m-%d')} set by {_set_by}"],
+                     f"roster: {now.strftime('%Y-%m-%d')} set by momo"],
                     capture_output=True,
                 )
                 if commit_r.returncode == 0:
@@ -1604,7 +1630,7 @@ class RosterWindow(ctk.CTkToplevel):
             exp_text, exp_color = self._expiry_info()
             self._exp_lbl.configure(text=exp_text, text_color=exp_color)
             self._meta_lbl.configure(
-                text=f"set by {_set_by} · {now.strftime('%Y-%m-%dT%H:%M')}"
+                text=f"set by momo · {now.strftime('%Y-%m-%dT%H:%M')}"
             )
 
         def _on_error(msg):
@@ -1621,15 +1647,7 @@ class RosterWindow(ctk.CTkToplevel):
 class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
     """Agent-to-agent chat panel, using a Slack DM as transport."""
 
-    CLAUDE_BIN = (
-        os.environ.get("CLAUDE_BIN")
-        or next((p for p in [
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-            os.path.expanduser("~/.local/bin/claude"),
-        ] if os.path.isfile(p)), None)
-        or "claude"
-    )
+    CLAUDE_BIN = "/opt/homebrew/bin/claude"
     _SLACK_TOOLS = (
         "mcp__plugin_slack_slack__slack_read_channel,"
         "mcp__plugin_slack_slack__slack_send_message,"
@@ -2291,41 +2309,6 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         if self._composing and self._last_sender(text) == self._bridge["peer_name"]:
             self._stop_composing()
 
-    def _post_text(self, text: str, on_done=None) -> None:
-        """Post a plain string to the Bridge channel via chat.postMessage.
-
-        Text posts don't need a model. Routing them through `claude --print`
-        left the UI disabled for the whole subprocess round trip (up to the
-        120s _claude timeout), and the Slack plugin's OAuth can't complete
-        headlessly anyway — same reasoning as _post_signals.
-        """
-        ch = self._bridge["channel"]
-
-        def run():
-            out = "ok"
-            tok = BridgeWindow._slack_token() or BridgeWindow._bot_token()
-            if not tok:
-                out = "(error: no Slack token in ~/.fleet/secrets.json)"
-            else:
-                payload = json.dumps({"channel": ch, "text": text}).encode()
-                req = urllib.request.Request(
-                    "https://slack.com/api/chat.postMessage",
-                    data=payload,
-                    headers={"Authorization": f"Bearer {tok}",
-                             "Content-Type": "application/json"},
-                )
-                try:
-                    with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
-                        result = json.loads(resp.read())
-                    if not result.get("ok"):
-                        out = f"(error: {result.get('error')})"
-                except Exception as e:
-                    out = f"(error: {e})"
-            if on_done is not None:
-                self.after(0, lambda: on_done(out))
-
-        threading.Thread(target=run, daemon=True).start()
-
     def _send(self):
         msg = self._entry.get().strip()
         if not msg:
@@ -2345,7 +2328,12 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         if self._collab_armed and not self._collab_active:
             self._collab_workdir = self._parse_workdir(msg)
             sentinel = f"::collab-task:: {msg} — {sn}"
-            def on_collab_started(_out):
+            collab_prompt = (
+                f'Send this exact message to Slack DM channel {ch}: '
+                f'"{sentinel}"\n'
+                "Do not add 'Sent using Claude' — it is appended automatically."
+            )
+            def on_collab_started(_text):
                 self._collab_active = True
                 self._collab_exchanges = 0
                 self._collab_stop.clear()
@@ -2354,7 +2342,7 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
                 self._set_status("Collab session running…")
                 self._refresh_history()
                 threading.Thread(target=self._collab_loop, daemon=True).start()
-            self._post_text(sentinel, on_collab_started)
+            self._claude(collab_prompt, on_collab_started)
             return
 
         _IMG_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'}
@@ -2382,16 +2370,20 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
                 daemon=True,
             ).start()
 
-        def on_result(out):
+        prompt = (
+            f"Send this exact message to Slack DM channel {ch}:\n"
+            f"{full_msg}\n"
+            "Do not add 'Sent using Claude' — it is appended automatically."
+        )
+
+        def on_result(_text):
             self._entry.configure(state="normal")
             self._send_btn.configure(state="normal", text="Send")
             self._entry.focus()
             self._start_composing()
             self._refresh_history()
-            if isinstance(out, str) and out.startswith("(error"):
-                self._set_status(f"Send failed: {out}")
 
-        self._post_text(full_msg, on_result)
+        self._claude(prompt, on_result)
 
     def _on_auto_toggle(self):
         ch = self._bridge["channel"]
@@ -2420,31 +2412,31 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         self._write_bridge_state(auto_active=(state == "on"))
 
         def _post_signals():
-            tok = BridgeWindow._slack_token()
-            if not tok:
-                self.after(0, lambda: on_signal_done("(no Slack token — add slack_token to ~/.fleet/secrets.json)"))
-                return
             out = "(no output)"
-            tok = BridgeWindow._slack_token() or BridgeWindow._bot_token()
-            if not tok:
-                out = "(error: no Slack token in ~/.fleet/secrets.json)"
-                self.after(0, lambda: on_signal_done(out))
-                return
             for peer in peers:
                 pn = peer["agent"]
                 msg = f"::{pn.lower()}-auto state={state} from={HUMAN_NAME.lower()}::"
+                prompt = (
+                    f'Send this exact message to Slack channel {ch}: "{msg}"\n'
+                    "Do not add 'Sent using Claude' — it is appended automatically."
+                )
                 try:
-                    req = urllib.request.Request(
-                        "https://slack.com/api/chat.postMessage",
-                        data=json.dumps({"channel": ch, "text": msg}).encode(),
-                        headers={
-                            "Authorization": f"Bearer {tok}",
-                            "Content-Type": "application/json",
-                        },
+                    proc = subprocess.Popen(
+                        [self.CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
+                         "--allowedTools",
+                         "mcp__plugin_slack_slack__slack_send_message"],
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True,
+                        start_new_session=True,
                     )
-                    with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
-                        result = json.loads(resp.read())
-                    out = "ok" if result.get("ok") else result.get("error", "(slack error)")
+                    try:
+                        stdout, _ = proc.communicate(input=prompt, timeout=30)
+                        out = self._clean(stdout) or "(no output)"
+                    except subprocess.TimeoutExpired:
+                        import os, signal as _sig
+                        os.killpg(os.getpgid(proc.pid), _sig.SIGKILL)
+                        proc.communicate()
+                        out = "(timed out)"
                 except Exception as e:
                     out = f"(error: {e})"
             self.after(0, lambda: on_signal_done(out))
@@ -2481,6 +2473,7 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
             self._stop_collab()
 
     def _stop_collab(self):
+        ch = self._bridge["channel"]
         sn = self._bridge["self_name"]
         was_active = self._collab_active
         self._collab_armed = False
@@ -2494,7 +2487,12 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         self._entry.configure(state="normal", placeholder_text=f"Message {self._bridge['peer_name']}…")
         self._send_btn.configure(state="normal", text="Send")
         if was_active:
-            self._post_text(f"::task complete:: — {sn}", lambda _: self._refresh_history())
+            close_prompt = (
+                f'Send this exact message to Slack DM channel {ch}: '
+                f'"::task complete:: — {sn}"\n'
+                "Do not add 'Sent using Claude' — it is appended automatically."
+            )
+            self._claude(close_prompt, lambda _: self._refresh_history())
 
     def _open_pair(self):
         if hasattr(self, "_pair_win") and self._pair_win.winfo_exists():
@@ -2663,11 +2661,6 @@ class PairDialog(ctk.CTkToplevel):
                         data = json.loads(resp.read())
             if not data.get("ok"):
                 raise ValueError(data.get("error", "unknown"))
-            try:
-                _cfg = json.loads((FLEET_DIR / "config.json").read_text())
-                self_uid = _cfg.get("bridge", {}).get("self_uid", "")
-            except Exception:
-                self_uid = ""
             now = time.time()
             seen_uids: set = set()
             agents = []
@@ -2684,8 +2677,6 @@ class PairDialog(ctk.CTkToplevel):
                 if not (am and hm and um):
                     continue
                 uid = um.group(1)
-                if self_uid and uid == self_uid:
-                    continue
                 if uid in seen_uids:
                     continue
                 seen_uids.add(uid)
@@ -3398,6 +3389,7 @@ class SessionPane(_FileAttachMixin, ctk.CTkFrame):
         )
         self._output.pack(fill="both", expand=True, pady=(0, 6))
         self._output.configure(state="disabled")
+        self._configure_tags()
 
         self._file_mixin_init()
         self._chips_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -3429,6 +3421,14 @@ class SessionPane(_FileAttachMixin, ctk.CTkFrame):
             command=self._send
         )
         self._run_btn.grid(row=0, column=2)
+
+    def _configure_tags(self):
+        tb = self._output._textbox
+        tb.tag_configure("act_bash",    foreground="#FFC72C", font=("SF Pro Mono", 10))
+        tb.tag_configure("act_read",    foreground="#5B9BD5", font=("SF Pro Mono", 10))
+        tb.tag_configure("act_edit",    foreground="#2DC6A0", font=("SF Pro Mono", 10))
+        tb.tag_configure("act_skill",   foreground="#B088D4", font=("SF Pro Mono", 10))
+        tb.tag_configure("act_default", foreground="#5A5558", font=("SF Pro Mono", 10))
 
     def _toggle_danger(self):
         self.session._dangerous = not self.session._dangerous
@@ -3482,11 +3482,12 @@ class SessionPane(_FileAttachMixin, ctk.CTkFrame):
         self._output.see("end")
 
     def _append_activity(self, line: str):
+        tag = _tool_activity_tag(line)
+        tb = self._output._textbox
         self._output.configure(state="normal")
-        self._output._textbox.insert("end", f"  {line}\n", "activity")
-        self._output._textbox.tag_config(
-            "activity", foreground="#4A4547", font=("SF Pro Mono", 10)
-        )
+        start = tb.index("end-1c")
+        tb.insert("end", f"  {line}\n")
+        tb.tag_add(tag, start, tb.index("end-1c"))
         self._output.see("end")
         self._output.configure(state="disabled")
 
@@ -3542,7 +3543,7 @@ class SessionPane(_FileAttachMixin, ctk.CTkFrame):
 
         def _on_tool(name):
             self._tools_this_turn += 1
-            self._status_lbl.configure(text=f"↻ {name}…")
+            self._status_lbl.configure(text=f"↻ {name}…", text_color=_tool_status_color(name))
 
         def _on_activity(line):
             self._append_activity(line)
@@ -3592,7 +3593,7 @@ class SessionPane(_FileAttachMixin, ctk.CTkFrame):
         _try(self._stop_spinner)
         _try(lambda: self._append("\n\n" + "─" * 64 + "\n"))
         _try(lambda: self._dot.configure(text_color=C_GREEN))
-        _try(lambda: self._status_lbl.configure(text="Done"))
+        _try(lambda: self._status_lbl.configure(text="Done", text_color=C_MUTED))
         _try(lambda: self._run_btn.configure(state="normal", text="Run"))
         _try(lambda: self._entry.configure(state="normal"))
         _try(self._entry.focus)
@@ -4057,29 +4058,6 @@ class FleetApp(ctk.CTk):
         # Log panel (hidden)
         self.log_panel = LogPanel(self)
 
-    def _kickstart_bridge_daemon(self):
-        try:
-            src = _REPO_DIR / "bridge-collab-listener.py"
-            dst = FLEET_DIR / "bridge-collab-listener.py"
-            if src.exists():
-                shutil.copy2(src, dst)
-        except Exception:
-            pass
-        try:
-            cfg = json.loads((FLEET_DIR / "config.json").read_text())
-            label = next(
-                (a["label"] for a in cfg.get("agents", [])
-                 if "bridge-collab-listener" in a.get("label", "")),
-                None
-            )
-            if label:
-                subprocess.run(
-                    ["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"],
-                    capture_output=True, timeout=5
-                )
-        except Exception:
-            pass
-
     def _reload_config(self):
         self.summary.status_lbl.configure(text="Pulling…")
         self.update_idletasks()
@@ -4099,7 +4077,6 @@ class FleetApp(ctk.CTk):
 
         if app_updated:
             self.summary.status_lbl.configure(text="Updated — restarting…")
-            self._kickstart_bridge_daemon()
             self.after(1500, lambda: os.execv(sys.executable, [sys.executable] + sys.argv))
             return
 
@@ -4113,7 +4090,6 @@ class FleetApp(ctk.CTk):
             card.pack(fill="x", pady=4)
             self._cards[agent["label"]] = card
         self._refresh()
-        self._kickstart_bridge_daemon()
         self.summary.status_lbl.configure(text="Config reloaded")
         self.after(3000, lambda: self.summary.status_lbl.configure(text=""))
 
@@ -4275,58 +4251,7 @@ def _memory_server_reachable() -> bool:
         return False
 
 
-def _ensure_app_bundle() -> None:
-    """Create ~/Applications/Fleet.app on first launch if it doesn't exist."""
-    import stat, shutil, subprocess
-    app = Path.home() / "Applications" / "Fleet.app"
-    if app.exists():
-        return
-    try:
-        macos = app / "Contents" / "MacOS"
-        res   = app / "Contents" / "Resources"
-        macos.mkdir(parents=True, exist_ok=True)
-        res.mkdir(parents=True, exist_ok=True)
-
-        (app / "Contents" / "Info.plist").write_text(
-            '<?xml version="1.0" encoding="UTF-8"?>\n'
-            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'
-            ' "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
-            '<plist version="1.0">\n<dict>\n'
-            '    <key>CFBundleExecutable</key><string>Fleet</string>\n'
-            '    <key>CFBundleIdentifier</key><string>com.fleet.app</string>\n'
-            '    <key>CFBundleName</key><string>Fleet</string>\n'
-            '    <key>CFBundleDisplayName</key><string>Fleet</string>\n'
-            '    <key>CFBundleIconFile</key><string>ApolloFleet</string>\n'
-            '    <key>CFBundlePackageType</key><string>APPL</string>\n'
-            '    <key>CFBundleVersion</key><string>1.0</string>\n'
-            '    <key>CFBundleShortVersionString</key><string>1.0</string>\n'
-            '    <key>LSMinimumSystemVersion</key><string>11.0</string>\n'
-            '    <key>NSHighResolutionCapable</key><true/>\n'
-            '    <key>NSSupportsAutomaticGraphicsSwitching</key><true/>\n'
-            '</dict>\n</plist>\n'
-        )
-
-        launcher = macos / "Fleet"
-        launcher.write_text('#!/bin/zsh\nexec "$HOME/.fleet/launch.sh"\n')
-        launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-        icns_src = FLEET_DIR / "ApolloFleet.icns"
-        if icns_src.exists():
-            shutil.copy2(icns_src, res / "ApolloFleet.icns")
-
-        _lsr = Path(
-            "/System/Library/Frameworks/CoreServices.framework"
-            "/Versions/A/Frameworks/LaunchServices.framework"
-            "/Versions/A/Support/lsregister"
-        )
-        if _lsr.exists():
-            subprocess.run([str(_lsr), "-f", str(app)], capture_output=True, timeout=10)
-    except Exception:
-        pass  # never block startup
-
-
 def main():
-    _ensure_app_bundle()
     _mem_started_by_fleet = False
     if _fleet_memory:
         if _memory_server_reachable():

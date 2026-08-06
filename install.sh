@@ -351,6 +351,16 @@ launchctl bootstrap "gui/$UID" "$FM_PLIST" \
     && ok "fleet_memory registered as user-scope MCP server" \
     || warn "MCP registration failed — run: claude mcp add --transport http --scope user fleet_memory http://127.0.0.1:54321/mcp"
 
+# ── Slack plugin ───────────────────────────────────────────────────────────────
+info "Slack plugin (required for Bridge sends and auto-respond)"
+if "$CLAUDE_BIN" mcp list 2>/dev/null | grep -q "plugin:slack"; then
+    ok "Slack plugin already installed"
+else
+    "$CLAUDE_BIN" plugin install slack@claude-plugins-official \
+        && ok "Slack plugin installed — authenticate in the browser prompt" \
+        || warn "Slack plugin install failed — run manually: claude plugin install slack@claude-plugins-official"
+fi
+
 # ── Phase 5c: pre-compact memory hook ────────────────────────────────────────
 info "Pre-compact memory hook"
 

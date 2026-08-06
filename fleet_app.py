@@ -914,418 +914,6 @@ def _tool_status_color(name: str) -> str:
     return C_MUTED
 
 
-# ── Chat Window ────────────────────────────────────────────────────────────────
-
-class ChatWindow(_FileAttachMixin, ctk.CTkToplevel):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.withdraw()
-        self.title(AGENT_NAME)
-        self.geometry("780x600")
-        self.minsize(520, 360)
-        self.configure(fg_color=C_BG)
-        self._first_message = True
-        self._busy = False
-        self._proc: subprocess.Popen | None = None
-        self._build()
-        self.bind("<Escape>", self._interrupt)
-        self.after(50, lambda: _center_on_parent(self, parent))
-        self.after(100, lambda: self.entry.focus())
-
-    def _build(self):
-        self.history = ctk.CTkTextbox(
-            self, font=("SF Pro Display", 13), wrap="word",
-            fg_color=C_CARD, activate_scrollbars=True
-        )
-        self.history.pack(fill="both", expand=True, padx=8, pady=(8, 4))
-        self.history.configure(state="disabled")
-        self._configure_tags()
-
-        self._file_mixin_init()
-        self._chips_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self._input_row = ctk.CTkFrame(self, fg_color="transparent")
-        self._input_row.pack(fill="x", padx=8, pady=(0, 10))
-        self._input_row.columnconfigure(0, weight=1)
-        self._input_ref = self._input_row
-
-        self.entry = ctk.CTkEntry(
-            self._input_row, font=("SF Pro Display", 13), height=38,
-            placeholder_text=f"Ask {AGENT_NAME}…"
-        )
-        self.entry.grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        self.entry.bind("<Return>", lambda _e: self._send())
-        self.entry.bind("<Command-v>", self._on_paste)
-        self._register_drop_target(self.entry)
-
-        ctk.CTkButton(
-            self._input_row, text="⊕", width=38, height=38,
-            font=("SF Pro Display", 16),
-            fg_color=BTN_NEUTRAL[0], hover_color=BTN_NEUTRAL[1],
-            command=self._open_file_picker
-        ).grid(row=0, column=1, padx=(0, 4))
-
-        self.send_btn = ctk.CTkButton(
-            self._input_row, text="Send", width=80, height=38,
-            font=("SF Pro Display", 13, "bold"),
-            fg_color=BTN_START[0], hover_color=BTN_START[1],
-            command=self._send
-        )
-        self.send_btn.grid(row=0, column=2)
-
-    def _configure_tags(self):
-        tb = self.history._textbox
-        tb.tag_configure("you_label",    foreground="#C8C5C6", font=("SF Pro Display", 13, "bold"))
-        tb.tag_configure("apollo_label", foreground="#E21E26", font=("SF Pro Display", 13, "bold"))
-        tb.tag_configure("act_bash",     foreground="#FFC72C", font=("SF Pro Mono", 10))
-        tb.tag_configure("act_read",     foreground="#5B9BD5", font=("SF Pro Mono", 10))
-        tb.tag_configure("act_edit",     foreground="#2DC6A0", font=("SF Pro Mono", 10))
-        tb.tag_configure("act_skill",    foreground="#B088D4", font=("SF Pro Mono", 10))
-        tb.tag_configure("act_default",  foreground="#5A5558", font=("SF Pro Mono", 10))
-        tb.tag_configure("separator",    foreground="#3A3336", font=("SF Pro Display", 11))
-
-    def _insert_tagged(self, text: str, tag: str | None = None):
-        """Insert text with optional tag. Does not stop the spinner."""
-        tb = self.history._textbox
-        self.history.configure(state="normal")
-        start = tb.index("end-1c")
-        tb.insert("end", text)
-        if tag:
-            tb.tag_add(tag, start, tb.index("end-1c"))
-        self.history.configure(state="disabled")
-        self.history.see("end")
-
-    def _append_separator(self):
-        sep = "─" * 28 + " ● " + "─" * 28
-        tb = self.history._textbox
-        self.history.configure(state="normal")
-        start = tb.index("end-1c")
-        tb.insert("end", f"\n\n{sep}\n")
-        tb.tag_add("separator", start, tb.index("end-1c"))
-        self.history.configure(state="disabled")
-        self.history.see("end")
-
-    _SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-    def _start_spinner(self):
-        self._spinning = True
-        self._spin_step = 0
-        self.history.configure(state="normal")
-        self.history.insert("end", self._SPINNER[0])
-        self.history.configure(state="disabled")
-        self._spin_id = self.after(100, self._tick_spinner)
-
-    def _tick_spinner(self):
-        if not getattr(self, "_spinning", False):
-            return
-        self._spin_step = (self._spin_step + 1) % len(self._SPINNER)
-        self.history.configure(state="normal")
-        self.history.delete("end-2c", "end-1c")
-        self.history.insert("end-1c", self._SPINNER[self._spin_step])
-        self.history.configure(state="disabled")
-        self.history.see("end")
-        self._spin_id = self.after(100, self._tick_spinner)
-
-    def _stop_spinner(self):
-        if not getattr(self, "_spinning", False):
-            return
-        self._spinning = False
-        if hasattr(self, "_spin_id"):
-            self.after_cancel(self._spin_id)
-        self.history.configure(state="normal")
-        self.history.delete("end-2c", "end-1c")
-        self.history.configure(state="disabled")
-
-    def _append(self, text: str):
-        self._stop_spinner()
-        self.history.configure(state="normal")
-        self.history.insert("end", text)
-        self.history.configure(state="disabled")
-        self.history.see("end")
-
-    def _append_activity(self, line: str):
-        tag = _tool_activity_tag(line)
-        tb = self.history._textbox
-        self.history.configure(state="normal")
-        start = tb.index("end-1c")
-        tb.insert("end", f"  {line}\n")
-        tb.tag_add(tag, start, tb.index("end-1c"))
-        self.history.see("end")
-        self.history.configure(state="disabled")
-
-    def _interrupt(self, _event=None):
-        proc = self._proc
-        if proc and proc.poll() is None:
-            proc.terminate()
-            self._proc = None
-            self._busy = False
-            self._stop_spinner()
-            self._append("\n[interrupted]\n")
-            self.send_btn.configure(state="normal", text="Send")
-            self.entry.configure(state="normal")
-            self.entry.focus()
-
-    def _send(self):
-        if self._busy:
-            return
-        msg = self.entry.get().strip()
-        if not msg:
-            return
-        self.entry.delete(0, "end")
-        self._busy = True
-        self.send_btn.configure(state="disabled", text="…")
-        self.entry.configure(state="disabled")
-        files = list(self._pending_files)
-        self._pending_files.clear()
-        self._rebuild_chips()
-
-        suffix = f"  +{len(files)} file(s)" if files else ""
-        self._insert_tagged("\n")
-        self._insert_tagged("You", "you_label")
-        self._insert_tagged(f"  {msg}{suffix}\n\n")
-        self._insert_tagged(AGENT_NAME, "apollo_label")
-        self._insert_tagged("  ")
-        self._start_spinner()
-
-        is_first = self._first_message
-        self._first_message = False
-
-        def run():
-            cmd = ["/opt/homebrew/bin/claude", "--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
-            if not is_first:
-                cmd.append("--continue")
-
-            stdin_data = None
-            if files:
-                cmd += ["--input-format", "stream-json"]
-                blocks = _build_content_blocks(files, msg)
-                stdin_data = json.dumps({
-                    "type": "user",
-                    "message": {"role": "user", "content": blocks},
-                }) + "\n"
-            else:
-                cmd.append(msg)
-
-            accumulated = ""
-            got_any = False
-
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdin=subprocess.PIPE if stdin_data else None,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    text=True, bufsize=1
-                )
-                self._proc = proc
-                if stdin_data:
-                    def _write_stdin():
-                        try:
-                            proc.stdin.write(stdin_data)
-                            proc.stdin.close()
-                        except Exception:
-                            pass
-                    threading.Thread(target=_write_stdin, daemon=True).start()
-
-                for raw_line in proc.stdout:
-                    line = raw_line.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-
-                    t = obj.get("type")
-
-                    if t == "assistant":
-                        content = obj.get("message", {}).get("content", [])
-                        text = "".join(
-                            b.get("text", "")
-                            for b in content
-                            if b.get("type") == "text"
-                        )
-                        for b in content:
-                            if b.get("type") == "tool_use" and b.get("name"):
-                                tname = b["name"]
-                                inp = b.get("input", {})
-                                first_val = str(next(iter(inp.values()), ""))[:60] if inp else ""
-                                label = f"⚙ {tname}({first_val})" if first_val else f"⚙ {tname}"
-                                self.after(0, lambda l=label: self._append_activity(l))
-                        if text and len(text) > len(accumulated):
-                            delta = text[len(accumulated):]
-                            accumulated = text
-                            got_any = True
-                            self.after(0, lambda d=delta: self._append(d))
-
-                    elif t == "result":
-                        final = obj.get("result", "")
-                        if final and len(final) > len(accumulated):
-                            delta = final[len(accumulated):]
-                            accumulated = final
-                            got_any = True
-                            self.after(0, lambda d=delta: self._append(d))
-                        break
-
-                proc.wait()
-
-                if not got_any:
-                    err = ANSI_ESCAPE.sub("", proc.stderr.read()).strip()
-                    if "too long" in err.lower() or "context" in err.lower():
-                        fallback = "Prompt too long — session context is full. Start a new session (+ button) or use smaller files."
-                    else:
-                        fallback = err or "(no response)"
-                    self.after(0, lambda t=fallback: self._append(t))
-
-            except FileNotFoundError:
-                self.after(0, lambda: self._append(
-                    "claude not found at /opt/homebrew/bin/claude — is Claude Code installed?"
-                ))
-            except Exception as e:
-                self.after(0, lambda: self._append(f"Error: {e}"))
-            finally:
-                self._proc = None
-
-            self.after(0, self._on_done)
-
-        threading.Thread(target=run, daemon=True).start()
-
-    def _on_done(self):
-        self._stop_spinner()
-        self._append_separator()
-        self._busy = False
-        self.send_btn.configure(state="normal", text="Send")
-        self.entry.configure(state="normal")
-        self.entry.focus()
-
-
-# ── Add Agent Dialog ───────────────────────────────────────────────────────────
-
-class AddAgentDialog(ctk.CTkToplevel):
-    def __init__(self, parent, on_save, existing_labels: list):
-        super().__init__(parent)
-        self.withdraw()
-        self.title("Add Agent")
-        self.geometry("500x440")
-        self.resizable(False, False)
-        self.grab_set()
-        self.configure(fg_color=C_BG)
-        self.on_save = on_save
-        self._existing_labels = existing_labels
-        self._build()
-        self.after(50, lambda: _center_on_parent(self, parent))
-
-    def _build(self):
-        ctk.CTkLabel(
-            self, text="Add Agent",
-            font=("SF Pro Display", 16, "bold")
-        ).pack(anchor="w", padx=20, pady=(16, 12))
-
-        form = ctk.CTkFrame(self, fg_color="transparent")
-        form.pack(fill="x", padx=20)
-        form.columnconfigure(1, weight=1)
-
-        # (label_text, key, browsable, placeholder)
-        fields = [
-            ("Display Name *", "display_name", False, "CAT Listener"),
-            ("Label *",        "label",        False, "com.yourname.agent-name"),
-            ("Description",    "description",  False, "what this agent does"),
-            ("Plist path",     "plist",        True,  "~/Library/LaunchAgents/com.example.plist"),
-            ("Stderr log",     "log_err",      True,  "~/.claude/monitor-state/agent.err"),
-            ("Stdout log",     "log_out",      True,  "~/.claude/monitor-state/agent.out"),
-            ("Stale after (s)","stale_after_seconds", False, "3600"),
-        ]
-
-        self._entries = {}
-        for i, (lbl, key, browsable, placeholder) in enumerate(fields):
-            ctk.CTkLabel(
-                form, text=lbl, font=("SF Pro Display", 12),
-                anchor="e", width=130
-            ).grid(row=i, column=0, sticky="e", pady=5, padx=(0, 10))
-
-            row = ctk.CTkFrame(form, fg_color="transparent")
-            row.grid(row=i, column=1, sticky="ew", pady=5)
-            row.columnconfigure(0, weight=1)
-
-            entry = ctk.CTkEntry(
-                row, font=("SF Pro Mono", 12), height=32,
-                placeholder_text=placeholder
-            )
-            entry.grid(row=0, column=0, sticky="ew")
-            self._entries[key] = entry
-
-            if browsable:
-                ctk.CTkButton(
-                    row, text="…", width=32, height=32,
-                    font=("SF Pro Display", 14),
-                    fg_color=BTN_NEUTRAL[0], hover_color=BTN_NEUTRAL[1],
-                    command=lambda e=entry: self._browse(e)
-                ).grid(row=0, column=1, padx=(4, 0))
-
-        self.err_lbl = ctk.CTkLabel(
-            self, text="", font=("SF Pro Display", 11), text_color="#FF4040"
-        )
-        self.err_lbl.pack(pady=(10, 0))
-
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack(fill="x", padx=20, pady=(6, 20))
-
-        ctk.CTkButton(
-            btn_row, text="Cancel", width=100, height=36,
-            font=("SF Pro Display", 13),
-            fg_color=BTN_NEUTRAL[0], hover_color=BTN_NEUTRAL[1],
-            command=self.destroy
-        ).pack(side="right", padx=(8, 0))
-
-        ctk.CTkButton(
-            btn_row, text="Add Agent", width=120, height=36,
-            font=("SF Pro Display", 13, "bold"),
-            fg_color=BTN_START[0], hover_color=BTN_START[1],
-            command=self._save
-        ).pack(side="right")
-
-    def _browse(self, entry):
-        from tkinter import filedialog
-        path = filedialog.askopenfilename(
-            initialdir=os.path.expanduser("~"),
-            filetypes=[("All files", "*.*"), ("Plists", "*.plist")]
-        )
-        if path:
-            home = str(Path.home())
-            if path.startswith(home):
-                path = "~" + path[len(home):]
-            entry.delete(0, "end")
-            entry.insert(0, path)
-
-    def _save(self):
-        display_name = self._entries["display_name"].get().strip()
-        label = self._entries["label"].get().strip()
-
-        if not display_name:
-            self.err_lbl.configure(text="Display Name is required")
-            return
-        if not label:
-            self.err_lbl.configure(text="Label is required")
-            return
-        if label in self._existing_labels:
-            self.err_lbl.configure(text=f"Label '{label}' already exists")
-            return
-
-        stale_raw = self._entries["stale_after_seconds"].get().strip()
-        try:
-            stale = int(stale_raw) if stale_raw else 3600
-        except ValueError:
-            self.err_lbl.configure(text="Stale after must be a number (seconds)")
-            return
-
-        agent = {"label": label, "display_name": display_name, "stale_after_seconds": stale}
-        for key in ("description", "plist", "log_err", "log_out"):
-            val = self._entries[key].get().strip()
-            if val:
-                agent[key] = val
-
-        self.on_save(agent)
-        self.destroy()
-
-
 # ── Built Window ──────────────────────────────────────────────────────────────
 
 class BuiltWindow(ctk.CTkToplevel):
@@ -3762,15 +3350,25 @@ class LogViewer(ctk.CTkToplevel):
                 pass
         super().destroy()
 
+# ── Comms Window (Chat + Sessions) ────────────────────────────────────────────
 
-class SessionsWindow(ctk.CTkToplevel):
-    def __init__(self, parent):
+class CommsWindow(_FileAttachMixin, ctk.CTkToplevel):
+    """Combined Chat + Sessions window with a mode switcher."""
+
+    def __init__(self, parent, tab: str = "Chat"):
         super().__init__(parent)
         self.withdraw()
-        self.title("Sessions")
-        self.geometry("780x620")
-        self.minsize(560, 420)
+        self.title(AGENT_NAME)
+        self.geometry("780x660")
+        self.minsize(520, 420)
         self.configure(fg_color=C_BG)
+
+        # Chat state
+        self._first_message = True
+        self._chat_busy = False
+        self._proc: subprocess.Popen | None = None
+
+        # Sessions state
         self._sessions: list[Session] = []
         self._active_permission_pids: set[str] = set()
         self._panes: dict[int, SessionPane] = {}
@@ -3778,42 +3376,306 @@ class SessionsWindow(ctk.CTkToplevel):
         self._tab_labels: dict[int, ctk.CTkLabel] = {}
         self._active_sid: int | None = None
         self._next_sid = 1
-        self._build_shell()
+
+        self._build()
         self._new_session()
+        self.bind("<Escape>", self._interrupt)
         self.after(50, lambda: _center_on_parent(self, parent))
         self.after(200, self._poll_permissions)
-        self.bind("<Escape>", self._interrupt)
+        self.switch_mode(tab)
+        if tab == "Chat":
+            self.after(150, lambda: self.entry.focus())
 
-    def _interrupt(self, _event=None):
-        pane = self._panes.get(self._active_sid)
-        if pane and pane.session._busy:
-            pane._interrupt()
+    def _build(self):
+        # Mode bar
+        mode_bar = ctk.CTkFrame(self, fg_color=C_HEADER, height=44)
+        mode_bar.pack(fill="x")
+        mode_bar.pack_propagate(False)
 
-    def _poll_permissions(self):
-        for path in FLEET_DIR.glob("pending_permission_*.json"):
-            pid_str = path.stem[len("pending_permission_"):]
-            if pid_str in self._active_permission_pids:
-                continue
-            # Reap stale files from crashed gates (gate timeout is 60s)
+        self._mode_seg = ctk.CTkSegmentedButton(
+            mode_bar,
+            values=["Chat", "Sessions"],
+            command=self.switch_mode,
+            font=("SF Pro Display", 13),
+            fg_color=C_CARD,
+            selected_color=C_BRAND,
+            selected_hover_color="#C41920",
+            unselected_color=C_CARD,
+            unselected_hover_color=C_BORDER,
+            text_color=("#FFFFFF", "#FFFFFF"),
+            height=30,
+        )
+        self._mode_seg.set("Chat")
+        self._mode_seg.pack(side="left", padx=10, pady=7)
+
+        # Content area — chat and sessions frames swap here
+        self._content = ctk.CTkFrame(self, fg_color="transparent")
+        self._content.pack(fill="both", expand=True)
+
+        self._chat_frame = ctk.CTkFrame(self._content, fg_color="transparent")
+        self._build_chat()
+
+        self._sessions_frame = ctk.CTkFrame(self._content, fg_color="transparent")
+        self._build_sessions_shell()
+
+    # ── Chat ──────────────────────────────────────────────────────────────────
+
+    def _build_chat(self):
+        self.history = ctk.CTkTextbox(
+            self._chat_frame, font=("SF Pro Display", 13), wrap="word",
+            fg_color=C_CARD, activate_scrollbars=True
+        )
+        self.history.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+        self.history.configure(state="disabled")
+        self._configure_tags()
+
+        self._file_mixin_init()
+        self._chips_frame = ctk.CTkFrame(self._chat_frame, fg_color="transparent")
+        self._input_row = ctk.CTkFrame(self._chat_frame, fg_color="transparent")
+        self._input_row.pack(fill="x", padx=8, pady=(0, 10))
+        self._input_row.columnconfigure(0, weight=1)
+        self._input_ref = self._input_row
+
+        self.entry = ctk.CTkEntry(
+            self._input_row, font=("SF Pro Display", 13), height=38,
+            placeholder_text=f"Ask {AGENT_NAME}…"
+        )
+        self.entry.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.entry.bind("<Return>", lambda _e: self._send())
+        self.entry.bind("<Command-v>", self._on_paste)
+        self._register_drop_target(self.entry)
+
+        ctk.CTkButton(
+            self._input_row, text="⊕", width=38, height=38,
+            font=("SF Pro Display", 16),
+            fg_color=BTN_NEUTRAL[0], hover_color=BTN_NEUTRAL[1],
+            command=self._open_file_picker
+        ).grid(row=0, column=1, padx=(0, 4))
+
+        self.send_btn = ctk.CTkButton(
+            self._input_row, text="Send", width=80, height=38,
+            font=("SF Pro Display", 13, "bold"),
+            fg_color=BTN_START[0], hover_color=BTN_START[1],
+            command=self._send
+        )
+        self.send_btn.grid(row=0, column=2)
+
+    def _configure_tags(self):
+        tb = self.history._textbox
+        tb.tag_configure("you_label",    foreground="#C8C5C6", font=("SF Pro Display", 13, "bold"))
+        tb.tag_configure("apollo_label", foreground="#E21E26", font=("SF Pro Display", 13, "bold"))
+        tb.tag_configure("act_bash",     foreground="#FFC72C", font=("SF Pro Mono", 10))
+        tb.tag_configure("act_read",     foreground="#5B9BD5", font=("SF Pro Mono", 10))
+        tb.tag_configure("act_edit",     foreground="#2DC6A0", font=("SF Pro Mono", 10))
+        tb.tag_configure("act_skill",    foreground="#B088D4", font=("SF Pro Mono", 10))
+        tb.tag_configure("act_default",  foreground="#5A5558", font=("SF Pro Mono", 10))
+        tb.tag_configure("separator",    foreground="#3A3336", font=("SF Pro Display", 11))
+
+    def _insert_tagged(self, text: str, tag: str | None = None):
+        tb = self.history._textbox
+        self.history.configure(state="normal")
+        start = tb.index("end-1c")
+        tb.insert("end", text)
+        if tag:
+            tb.tag_add(tag, start, tb.index("end-1c"))
+        self.history.configure(state="disabled")
+        self.history.see("end")
+
+    def _append_separator(self):
+        sep = "─" * 28 + " ● " + "─" * 28
+        tb = self.history._textbox
+        self.history.configure(state="normal")
+        start = tb.index("end-1c")
+        tb.insert("end", f"\n\n{sep}\n")
+        tb.tag_add("separator", start, tb.index("end-1c"))
+        self.history.configure(state="disabled")
+        self.history.see("end")
+
+    _SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def _start_spinner(self):
+        self._spinning = True
+        self._spin_step = 0
+        self.history.configure(state="normal")
+        self.history.insert("end", self._SPINNER[0])
+        self.history.configure(state="disabled")
+        self._spin_id = self.after(100, self._tick_spinner)
+
+    def _tick_spinner(self):
+        if not getattr(self, "_spinning", False):
+            return
+        self._spin_step = (self._spin_step + 1) % len(self._SPINNER)
+        self.history.configure(state="normal")
+        self.history.delete("end-2c", "end-1c")
+        self.history.insert("end-1c", self._SPINNER[self._spin_step])
+        self.history.configure(state="disabled")
+        self.history.see("end")
+        self._spin_id = self.after(100, self._tick_spinner)
+
+    def _stop_spinner(self):
+        if not getattr(self, "_spinning", False):
+            return
+        self._spinning = False
+        if hasattr(self, "_spin_id"):
+            self.after_cancel(self._spin_id)
+        self.history.configure(state="normal")
+        self.history.delete("end-2c", "end-1c")
+        self.history.configure(state="disabled")
+
+    def _append(self, text: str):
+        self._stop_spinner()
+        self.history.configure(state="normal")
+        self.history.insert("end", text)
+        self.history.configure(state="disabled")
+        self.history.see("end")
+
+    def _append_activity(self, line: str):
+        tag = _tool_activity_tag(line)
+        tb = self.history._textbox
+        self.history.configure(state="normal")
+        start = tb.index("end-1c")
+        tb.insert("end", f"  {line}\n")
+        tb.tag_add(tag, start, tb.index("end-1c"))
+        self.history.see("end")
+        self.history.configure(state="disabled")
+
+    def _send(self):
+        if self._chat_busy:
+            return
+        msg = self.entry.get().strip()
+        if not msg:
+            return
+        self.entry.delete(0, "end")
+        self._chat_busy = True
+        self.send_btn.configure(state="disabled", text="…")
+        self.entry.configure(state="disabled")
+        files = list(self._pending_files)
+        self._pending_files.clear()
+        self._rebuild_chips()
+
+        suffix = f"  +{len(files)} file(s)" if files else ""
+        self._insert_tagged("\n")
+        self._insert_tagged("You", "you_label")
+        self._insert_tagged(f"  {msg}{suffix}\n\n")
+        self._insert_tagged(AGENT_NAME, "apollo_label")
+        self._insert_tagged("  ")
+        self._start_spinner()
+
+        is_first = self._first_message
+        self._first_message = False
+
+        def run():
+            cmd = ["/opt/homebrew/bin/claude", "--print", "--output-format", "stream-json",
+                   "--verbose", "--dangerously-skip-permissions"]
+            if not is_first:
+                cmd.append("--continue")
+
+            stdin_data = None
+            if files:
+                cmd += ["--input-format", "stream-json"]
+                blocks = _build_content_blocks(files, msg)
+                stdin_data = json.dumps({
+                    "type": "user",
+                    "message": {"role": "user", "content": blocks},
+                }) + "\n"
+            else:
+                cmd.append(msg)
+
+            accumulated = ""
+            got_any = False
+
             try:
-                if time.time() - path.stat().st_mtime > 70:
-                    try:
-                        path.unlink()
-                    except OSError:
-                        pass
-                    continue
-                req = json.loads(path.read_text())
-            except Exception:
-                continue
-            self._active_permission_pids.add(pid_str)
-            PermissionDialog(
-                self, req,
-                on_done=lambda p=pid_str: self._active_permission_pids.discard(p),
-            )
-        self.after(150, self._poll_permissions)
+                proc = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE if stdin_data else None,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, bufsize=1
+                )
+                self._proc = proc
+                if stdin_data:
+                    def _write_stdin():
+                        try:
+                            proc.stdin.write(stdin_data)
+                            proc.stdin.close()
+                        except Exception:
+                            pass
+                    threading.Thread(target=_write_stdin, daemon=True).start()
 
-    def _build_shell(self):
-        self._tab_bar = ctk.CTkFrame(self, fg_color=C_HEADER, height=44)
+                for raw_line in proc.stdout:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    t = obj.get("type")
+
+                    if t == "assistant":
+                        content = obj.get("message", {}).get("content", [])
+                        text = "".join(
+                            b.get("text", "")
+                            for b in content
+                            if b.get("type") == "text"
+                        )
+                        for b in content:
+                            if b.get("type") == "tool_use" and b.get("name"):
+                                tname = b["name"]
+                                inp = b.get("input", {})
+                                first_val = str(next(iter(inp.values()), ""))[:60] if inp else ""
+                                label = f"⚙ {tname}({first_val})" if first_val else f"⚙ {tname}"
+                                self.after(0, lambda l=label: self._append_activity(l))
+                        if text and len(text) > len(accumulated):
+                            delta = text[len(accumulated):]
+                            accumulated = text
+                            got_any = True
+                            self.after(0, lambda d=delta: self._append(d))
+
+                    elif t == "result":
+                        final = obj.get("result", "")
+                        if final and len(final) > len(accumulated):
+                            delta = final[len(accumulated):]
+                            accumulated = final
+                            got_any = True
+                            self.after(0, lambda d=delta: self._append(d))
+                        break
+
+                proc.wait()
+
+                if not got_any:
+                    err = ANSI_ESCAPE.sub("", proc.stderr.read()).strip()
+                    if "too long" in err.lower() or "context" in err.lower():
+                        fallback = "Prompt too long — session context is full. Start a new chat or use smaller files."
+                    else:
+                        fallback = err or "(no response)"
+                    self.after(0, lambda t=fallback: self._append(t))
+
+            except FileNotFoundError:
+                self.after(0, lambda: self._append(
+                    "claude not found at /opt/homebrew/bin/claude — is Claude Code installed?"
+                ))
+            except Exception as e:
+                self.after(0, lambda: self._append(f"Error: {e}"))
+            finally:
+                self._proc = None
+
+            self.after(0, self._on_chat_done)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_chat_done(self):
+        self._stop_spinner()
+        self._append_separator()
+        self._chat_busy = False
+        self.send_btn.configure(state="normal", text="Send")
+        self.entry.configure(state="normal")
+        self.entry.focus()
+
+    # ── Sessions ──────────────────────────────────────────────────────────────
+
+    def _build_sessions_shell(self):
+        self._tab_bar = ctk.CTkFrame(self._sessions_frame, fg_color=C_HEADER, height=44)
         self._tab_bar.pack(fill="x")
         self._tab_bar.pack_propagate(False)
 
@@ -3841,8 +3703,30 @@ class SessionsWindow(ctk.CTkToplevel):
             command=self._open_logs_window
         ).pack(side="left", padx=(0, 6), pady=7)
 
-        self._content = ctk.CTkFrame(self, fg_color="transparent")
-        self._content.pack(fill="both", expand=True, padx=10, pady=(8, 10))
+        self._sessions_content = ctk.CTkFrame(self._sessions_frame, fg_color="transparent")
+        self._sessions_content.pack(fill="both", expand=True, padx=10, pady=(8, 10))
+
+    def _poll_permissions(self):
+        for path in FLEET_DIR.glob("pending_permission_*.json"):
+            pid_str = path.stem[len("pending_permission_"):]
+            if pid_str in self._active_permission_pids:
+                continue
+            try:
+                if time.time() - path.stat().st_mtime > 70:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+                    continue
+                req = json.loads(path.read_text())
+            except Exception:
+                continue
+            self._active_permission_pids.add(pid_str)
+            PermissionDialog(
+                self, req,
+                on_done=lambda p=pid_str: self._active_permission_pids.discard(p),
+            )
+        self.after(150, self._poll_permissions)
 
     def _open_resume_dialog(self):
         active_pane = self._panes.get(self._active_sid)
@@ -3876,8 +3760,8 @@ class SessionsWindow(ctk.CTkToplevel):
         self._sessions.append(session)
 
         pane = SessionPane(
-            self._content, session,
-            on_status_change=lambda: self._refresh_tab(sid)
+            self._sessions_content, session,
+            on_status_change=lambda: self._refresh_session_tab(sid)
         )
         self._panes[sid] = pane
 
@@ -3890,8 +3774,8 @@ class SessionsWindow(ctk.CTkToplevel):
             font=("SF Pro Display", 12), width=72, anchor="w"
         )
         lbl.pack(side="left", padx=(8, 2), pady=5)
-        lbl.bind("<Button-1>", lambda _e, s=sid: self._switch_tab(s))
-        tab.bind("<Button-1>", lambda _e, s=sid: self._switch_tab(s))
+        lbl.bind("<Button-1>", lambda _e, s=sid: self._switch_session_tab(s))
+        tab.bind("<Button-1>", lambda _e, s=sid: self._switch_session_tab(s))
         self._tab_labels[sid] = lbl
 
         ctk.CTkButton(
@@ -3901,13 +3785,13 @@ class SessionsWindow(ctk.CTkToplevel):
             command=lambda s=sid: self._close_session(s)
         ).pack(side="left", padx=(0, 4), pady=4)
 
-        self._switch_tab(sid)
+        self._switch_session_tab(sid)
 
-    def _switch_tab(self, sid: int):
+    def _switch_session_tab(self, sid: int):
         for pane in self._panes.values():
             pane.pack_forget()
         self._active_sid = sid
-        self._refresh_all_tabs()
+        self._refresh_all_session_tabs()
         self._panes[sid].pack(fill="both", expand=True)
         self._panes[sid].focus_input()
 
@@ -3920,7 +3804,7 @@ class SessionsWindow(ctk.CTkToplevel):
         self._sessions = [s for s in self._sessions if s.sid != sid]
         if self._active_sid == sid:
             if self._sessions:
-                self._switch_tab(self._sessions[-1].sid)
+                self._switch_session_tab(self._sessions[-1].sid)
             else:
                 self._new_session()
 
@@ -3930,10 +3814,10 @@ class SessionsWindow(ctk.CTkToplevel):
             display = name if len(name) <= 14 else name[:13] + "…"
             lbl.configure(text=display)
 
-    def _refresh_tab(self, sid: int):
-        self._refresh_all_tabs()
+    def _refresh_session_tab(self, sid: int):
+        self._refresh_all_session_tabs()
 
-    def _refresh_all_tabs(self):
+    def _refresh_all_session_tabs(self):
         for s in self._sessions:
             frame = self._tab_frames.get(s.sid)
             if not frame:
@@ -3943,6 +3827,37 @@ class SessionsWindow(ctk.CTkToplevel):
                 frame.configure(fg_color="#5C1215" if not is_active else "#7A1820")
             else:
                 frame.configure(fg_color="#3A1D1F" if is_active else C_BORDER)
+
+    # ── Mode switch ───────────────────────────────────────────────────────────
+
+    def switch_mode(self, mode: str):
+        self._mode_seg.set(mode)
+        if mode == "Chat":
+            self._sessions_frame.pack_forget()
+            self._chat_frame.pack(fill="both", expand=True)
+            self.after(50, lambda: self.entry.focus())
+        else:
+            self._chat_frame.pack_forget()
+            self._sessions_frame.pack(fill="both", expand=True)
+
+    # ── Interrupt (mode-aware) ────────────────────────────────────────────────
+
+    def _interrupt(self, _event=None):
+        if self._mode_seg.get() == "Chat":
+            proc = self._proc
+            if proc and proc.poll() is None:
+                proc.terminate()
+                self._proc = None
+                self._chat_busy = False
+                self._stop_spinner()
+                self._append("\n[interrupted]\n")
+                self.send_btn.configure(state="normal", text="Send")
+                self.entry.configure(state="normal")
+                self.entry.focus()
+        else:
+            pane = self._panes.get(self._active_sid)
+            if pane and pane.session._busy:
+                pane._interrupt()
 
 
 # ── Main App ───────────────────────────────────────────────────────────────────
@@ -3956,8 +3871,8 @@ class FleetApp(ctk.CTk):
             except Exception:
                 pass
         self.title(f"{AGENT_NAME} Fleet")
-        self.geometry("660x540")
-        self.minsize(500, 380)
+        self.geometry("720x540")
+        self.minsize(560, 380)
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("dark-blue")
         self.configure(fg_color=C_BG)
@@ -3972,7 +3887,7 @@ class FleetApp(ctk.CTk):
         self._schedule_auto_refresh()
 
     def _build(self):
-        # Header
+        # ── Header ────────────────────────────────────────────────────────────
         header = ctk.CTkFrame(self, fg_color=C_HEADER, height=50)
         header.pack(fill="x")
         header.pack_propagate(False)
@@ -3993,61 +3908,54 @@ class FleetApp(ctk.CTk):
         )
         self.ts_lbl.pack(side="right", padx=8)
 
-        ctk.CTkButton(
+        reload_btn = ctk.CTkButton(
             header, text="↺", width=36, height=32,
             font=("SF Pro Display", 16), corner_radius=6,
             fg_color=BTN_NEUTRAL[0], hover_color=BTN_NEUTRAL[1],
             command=self._reload_config
-        ).pack(side="right", padx=(4, 0), pady=8)
+        )
+        reload_btn.pack(side="right", padx=(4, 0), pady=8)
 
-        ctk.CTkButton(
+        add_btn = ctk.CTkButton(
             header, text="+", width=36, height=32,
             font=("SF Pro Display", 20), corner_radius=6,
             fg_color=BTN_START[0], hover_color=BTN_START[1],
             command=self._open_add_dialog
-        ).pack(side="right", padx=(4, 0), pady=8)
+        )
+        add_btn.pack(side="right", padx=(4, 0), pady=8)
 
-        ctk.CTkButton(
-            header, text="Sessions", width=72, height=32,
-            font=("SF Pro Display", 13), corner_radius=6,
-            fg_color=C_BRAND, hover_color="#C41920",
-            command=self._open_sessions
-        ).pack(side="right", padx=(4, 0), pady=8)
+        self._bind_tooltip(reload_btn, "Reload Config", direction="below")
+        self._bind_tooltip(add_btn, "Add Agent", direction="below")
 
-        ctk.CTkButton(
-            header, text="Bridge", width=62, height=32,
-            font=("SF Pro Display", 13), corner_radius=6,
-            fg_color="#0E7490", hover_color="#0891B2",
-            command=self._open_bridge
-        ).pack(side="right", padx=(4, 0), pady=8)
+        # ── Body = sidebar + separator + main ─────────────────────────────────
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True)
 
-        ctk.CTkButton(
-            header, text="Chat", width=58, height=32,
-            font=("SF Pro Display", 13), corner_radius=6,
-            fg_color="#4B2D8F", hover_color="#6D3FC0",
-            command=self._open_chat
-        ).pack(side="right", padx=(4, 0), pady=8)
+        # Sidebar
+        sidebar = ctk.CTkFrame(body, fg_color=C_HEADER, width=56)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
 
-        ctk.CTkButton(
-            header, text="Built", width=52, height=32,
-            font=("SF Pro Display", 13), corner_radius=6,
-            fg_color="#1E3A5F", hover_color="#1D4ED8",
-            command=self._open_built
-        ).pack(side="right", padx=(4, 0), pady=8)
+        self._nav_icons: dict[str, tuple] = {}
+        self._nav_icons["comms"]  = self._make_nav_icon(sidebar, "✦", "Chat & Sessions", self._open_comms)
+        self._nav_icons["bridge"] = self._make_nav_icon(sidebar, "⇄", "Bridge",          self._open_bridge)
+        ctk.CTkFrame(sidebar, fg_color="transparent").pack(fill="y", expand=True)
+        self._nav_icons["roster"] = self._make_nav_icon(sidebar, "◎", "Roster", self._open_roster)
+        self._nav_icons["built"]  = self._make_nav_icon(sidebar, "⊞", "Built",  self._open_built)
 
-        ctk.CTkButton(
-            header, text="Roster", width=62, height=32,
-            font=("SF Pro Display", 13), corner_radius=6,
-            fg_color="#5B21B6", hover_color="#6D28D9",
-            command=self._open_roster
-        ).pack(side="right", padx=(4, 0), pady=8)
+        # Separator
+        ctk.CTkFrame(body, fg_color=C_BORDER, width=1).pack(side="left", fill="y")
+
+        # Main content
+        main = ctk.CTkFrame(body, fg_color="transparent")
+        main.pack(side="left", fill="both", expand=True)
 
         # Summary bar
-        self.summary = SummaryBar(self)
+        self.summary = SummaryBar(main)
         self.summary.pack(fill="x", padx=0, pady=0)
 
         # Agent cards
-        self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll = ctk.CTkScrollableFrame(main, fg_color="transparent")
         self.scroll.pack(fill="both", expand=True, padx=8, pady=8)
 
         for agent in self._config.get("agents", []):
@@ -4055,8 +3963,122 @@ class FleetApp(ctk.CTk):
             card.pack(fill="x", pady=4)
             self._cards[agent["label"]] = card
 
-        # Log panel (hidden)
-        self.log_panel = LogPanel(self)
+        # Log panel (hidden, lives in main so it doesn't overlap sidebar)
+        self.log_panel = LogPanel(main)
+
+    def _bind_tooltip(self, widget, text: str, direction: str = "right"):
+        _active = [False]
+
+        def _poll():
+            if not _active[0]:
+                return
+            try:
+                mx = self.winfo_pointerx()
+                my = self.winfo_pointery()
+                x1 = widget.winfo_rootx()
+                y1 = widget.winfo_rooty()
+                x2 = x1 + widget.winfo_width()
+                y2 = y1 + widget.winfo_height()
+                if x1 <= mx <= x2 and y1 <= my <= y2:
+                    self.after(80, _poll)
+                else:
+                    _active[0] = False
+                    _hide_tooltip()
+            except Exception:
+                _active[0] = False
+                _hide_tooltip()
+
+        def _hide_tooltip():
+            if hasattr(self, "_tt_lbl"):
+                try:
+                    self._tt_lbl.destroy()
+                except Exception:
+                    pass
+                try:
+                    del self._tt_lbl
+                except Exception:
+                    pass
+
+        def _show(e):
+            if _active[0]:
+                return
+            try:
+                wx = widget.winfo_rootx() - self.winfo_rootx()
+                wy = widget.winfo_rooty() - self.winfo_rooty()
+                if direction == "right":
+                    x = wx + widget.winfo_width() + 8
+                    y = wy + (widget.winfo_height() - 26) // 2
+                else:
+                    x = wx
+                    y = wy + widget.winfo_height() + 4
+                _hide_tooltip()
+                self._tt_lbl = ctk.CTkLabel(
+                    self, text=f"  {text}  ",
+                    font=("SF Pro Display", 11),
+                    fg_color=C_CARD,
+                    corner_radius=4,
+                    text_color="#F0ECEE",
+                )
+                self._tt_lbl.place(x=x, y=y)
+                self._tt_lbl.lift()
+                _active[0] = True
+                self.after(80, _poll)
+            except Exception:
+                pass
+
+        def _attach(w):
+            try:
+                w.bind("<Enter>", _show, add=True)
+            except Exception:
+                pass
+            for attr in ("_canvas", "_text_label", "_image_label"):
+                cv = getattr(w, attr, None)
+                if cv is not None:
+                    try:
+                        cv.bind("<Enter>", _show, add=True)
+                    except Exception:
+                        pass
+            for child in w.winfo_children():
+                _attach(child)
+
+        _attach(widget)
+
+    def _make_nav_icon(self, parent, icon: str, tooltip: str, command) -> tuple:
+        container = ctk.CTkFrame(parent, fg_color="transparent", height=44)
+        container.pack(fill="x")
+        container.pack_propagate(False)
+
+        bar = ctk.CTkFrame(container, fg_color="transparent", width=3)
+        bar.pack(side="left", fill="y")
+        bar.pack_propagate(False)
+
+        btn = ctk.CTkButton(
+            container, text=icon, width=40, height=40,
+            font=("SF Pro Display", 18), corner_radius=8,
+            fg_color="transparent", hover_color=C_CARD,
+            text_color=C_MUTED,
+            command=command
+        )
+        btn.pack(side="left", padx=(5, 0), pady=2)
+        self._bind_tooltip(btn, tooltip)
+        return (bar, btn)
+
+    def _set_nav_active(self, key: str | None):
+        for k, (bar, btn) in self._nav_icons.items():
+            if k == key:
+                bar.configure(fg_color=C_BRAND)
+                btn.configure(fg_color="#2D1A1B", text_color="#F0ECEE")
+            else:
+                bar.configure(fg_color="transparent")
+                btn.configure(fg_color="transparent", text_color=C_MUTED)
+
+    def _open_comms(self, tab: str = "Chat"):
+        self._set_nav_active("comms")
+        if not hasattr(self, "_comms_win") or not self._comms_win.winfo_exists():
+            self._comms_win = CommsWindow(self, tab=tab)
+        else:
+            self._comms_win.switch_mode(tab)
+            self._comms_win.lift()
 
     def _reload_config(self):
         self.summary.status_lbl.configure(text="Pulling…")
@@ -4159,32 +4181,22 @@ class FleetApp(ctk.CTk):
 
         threading.Thread(target=run, daemon=True).start()
 
-    def _open_chat(self):
-        if not hasattr(self, "_chat_win") or not self._chat_win.winfo_exists():
-            self._chat_win = ChatWindow(self)
-        else:
-            self._chat_win.lift()
-            self._chat_win.entry.focus()
-
-    def _open_sessions(self):
-        if not hasattr(self, "_sessions_win") or not self._sessions_win.winfo_exists():
-            self._sessions_win = SessionsWindow(self)
-        else:
-            self._sessions_win.lift()
-
     def _open_bridge(self):
+        self._set_nav_active("bridge")
         if not hasattr(self, "_bridge_win") or not self._bridge_win.winfo_exists():
             self._bridge_win = BridgeWindow(self)
         else:
             self._bridge_win.lift()
 
     def _open_built(self):
+        self._set_nav_active("built")
         if not hasattr(self, "_built_win") or not self._built_win.winfo_exists():
             self._built_win = BuiltWindow(self)
         else:
             self._built_win.lift()
 
     def _open_roster(self):
+        self._set_nav_active("roster")
         if not hasattr(self, "_roster_win") or not self._roster_win.winfo_exists():
             self._roster_win = RosterWindow(self)
         else:

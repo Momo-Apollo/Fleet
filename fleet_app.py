@@ -1998,12 +1998,13 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
             on_signal_done = lambda _: None
 
         self._write_bridge_state(auto_active=(state == "on"))
+        seq = int(time.time() * 1000)
 
         def _post_signals():
             out = "(no output)"
             for peer in peers:
                 pn = peer["agent"]
-                msg = f"::{pn.lower()}-auto state={state} from={HUMAN_NAME.lower()}::"
+                msg = f"::{pn.lower()}-auto state={state} from={HUMAN_NAME.lower()} seq={seq}::"
                 prompt = (
                     f'Send this exact message to Slack channel {ch}: "{msg}"\n'
                     "Do not add 'Sent using Claude' — it is appended automatically."
@@ -2086,7 +2087,8 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         if hasattr(self, "_pair_win") and self._pair_win.winfo_exists():
             self._pair_win.lift()
             return
-        self._pair_win = PairDialog(self, on_pair=self._on_paired)
+        self._pair_win = PairDialog(self, on_pair=self._on_paired,
+                                    self_uid=self._bridge.get("self_uid", ""))
 
     def _on_paired(self, bridge: dict):
         self._bridge = bridge
@@ -2162,10 +2164,42 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         while not self._poll_stop.wait(5):
             self.after(0, self._refresh_history)
 
+    def _fire_auto_off_on_close(self):
+        try:
+            ch = self._bridge.get("channel", "")
+            is_group = self._bridge.get("mode") == "group"
+            peers = self._bridge.get("peers", []) if is_group else [{"agent": self._bridge.get("peer_name", "")}]
+            seq = int(time.time() * 1000)
+            for peer in peers:
+                pn = (peer.get("agent") or "").lower()
+                if not pn or not ch:
+                    continue
+                msg = f"::{pn}-auto state=off from={HUMAN_NAME.lower()} seq={seq} reason=app-close::"
+                prompt = (
+                    f'Send this exact message to Slack channel {ch}: "{msg}"\n'
+                    "Do not add 'Sent using Claude' — it is appended automatically."
+                )
+                proc = subprocess.Popen(
+                    [self.CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
+                     "--allowedTools", "mcp__plugin_slack_slack__slack_send_message"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    start_new_session=True,
+                )
+                proc.stdin.write(prompt)
+                proc.stdin.close()
+        except Exception:
+            pass
+
     def destroy(self):
         self._poll_stop.set()
         self._collab_stop.set()
         self._auto_stop.set()
+        if self._auto_active:
+            self._fire_auto_off_on_close()
+        self._write_bridge_state(auto_active=False)
         super().destroy()
 
 
@@ -2175,7 +2209,7 @@ class PairDialog(ctk.CTkToplevel):
     """Reads #fleet-pairing for active agents and writes bridge config on selection."""
     _PRESENCE_MAX_AGE = 900  # 15 minutes
 
-    def __init__(self, parent, on_pair):
+    def __init__(self, parent, on_pair, self_uid: str = ""):
         super().__init__(parent)
         self.withdraw()
         self.title("Pair Agent")
@@ -2183,6 +2217,7 @@ class PairDialog(ctk.CTkToplevel):
         self.minsize(400, 280)
         self.configure(fg_color=C_BG)
         self._on_pair = on_pair
+        self._self_uid = self_uid
         self._agents: list[dict] = []
         self._selected_set: set[int] = set()
         self._row_frames: list = []
@@ -2272,6 +2307,9 @@ class PairDialog(ctk.CTkToplevel):
                     "agent": am.group(1), "human": hm.group(1),
                     "uid": uid, "ts": ts,
                 })
+            agents = [a for a in agents
+                      if a["uid"] != self._self_uid
+                      and a["agent"].lower() != AGENT_NAME.lower()]
             self.after(0, lambda a=agents: self._populate(a))
         except Exception as e:
             self.after(0, lambda err=str(e): self._status_lbl.configure(text=f"Error: {err}"))

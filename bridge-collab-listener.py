@@ -488,11 +488,19 @@ def _parse_workdir(task_text: str) -> str:
 
 # ── auto-respond ─────────────────────────────────────────────────────────────
 
+_auto_seq_hwm: int = 0  # highest seq seen; guards against out-of-order delivery
+
 def _detect_auto_signal(msgs: list, self_name: str, since_ts: float = 0.0) -> bool | None:
     """Return True/False/None for most recent auto-signal newer than since_ts.
 
     Signals older than since_ts are ignored so stale history entries don't
-    re-trigger auto mode every poll cycle."""
+    re-trigger auto mode every poll cycle.
+
+    If the sentinel carries a seq=<epoch_ms> field, ordering is enforced via
+    _auto_seq_hwm: sentinels with seq <= hwm return None (not False) so a
+    stale off cannot drop an active session. Unstamped sentinels keep the
+    original newest-Slack-ts-wins behavior for backwards compatibility."""
+    global _auto_seq_hwm
     sentinel = f"::{self_name.lower()}-auto"
     for m in reversed(msgs):
         ts = float(m.get("ts", 0))
@@ -500,6 +508,17 @@ def _detect_auto_signal(msgs: list, self_name: str, since_ts: float = 0.0) -> bo
         if sentinel in txt:
             if ts <= since_ts:
                 return None  # already processed or predates daemon start
+            seq = None
+            for part in txt.split():
+                if part.startswith("seq="):
+                    try:
+                        seq = int(part[4:].rstrip(":"))
+                    except ValueError:
+                        pass
+            if seq is not None:
+                if seq <= _auto_seq_hwm:
+                    return None  # stale — discard without acting
+                _auto_seq_hwm = seq
             return "state=on" in txt
     return None
 

@@ -1738,24 +1738,8 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         self.after(500, self._refresh_history)
 
     def _load_presence(self) -> None:
-        """Post startup heartbeat to #fleet-pairing, then populate the presence strip."""
+        """Populate the presence strip from #fleet-pairing (daemon owns heartbeat posting)."""
         b = self._bridge
-        bot_tok = BridgeWindow._bot_token()
-        if bot_tok:
-            text = (f"::fleet-presence:: agent={b['self_name']} "
-                    f"human={b.get('self_human', 'Momo')} uid={b['self_uid']}")
-            payload = json.dumps({"channel": FLEET_PAIRING_CHANNEL, "text": text}).encode()
-            req = urllib.request.Request(
-                "https://slack.com/api/chat.postMessage",
-                data=payload,
-                headers={"Authorization": f"Bearer {bot_tok}", "Content-Type": "application/json"},
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
-                    json.loads(resp.read())
-            except Exception:
-                pass
-
         user_tok = BridgeWindow._slack_token()
         agents = []
         if user_tok:
@@ -2207,7 +2191,8 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
 
 class PairDialog(ctk.CTkToplevel):
     """Reads #fleet-pairing for active agents and writes bridge config on selection."""
-    _PRESENCE_MAX_AGE = 900  # 15 minutes
+    _PRESENCE_MAX_AGE         = 900   # 15 minutes (normal scan)
+    _PRESENCE_MAX_AGE_REFRESH = 3600  # 60 minutes (refresh scan)
 
     def __init__(self, parent, on_pair, self_uid: str = ""):
         super().__init__(parent)
@@ -2231,9 +2216,13 @@ class PairDialog(ctk.CTkToplevel):
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
         ctk.CTkLabel(hdr, text="Pair Agent", font=("SF Pro Display", 14, "bold")).pack(side="left", padx=14, pady=10)
+        ctk.CTkButton(hdr, text="↺", width=28, height=28,
+                      font=("SF Pro Display", 14),
+                      fg_color=BTN_NEUTRAL[0], hover_color=BTN_NEUTRAL[1],
+                      command=self._refresh).pack(side="right", padx=(0, 8), pady=6)
         self._status_lbl = ctk.CTkLabel(hdr, text="Scanning #fleet-pairing…",
                                          font=("SF Pro Mono", 10), text_color=C_MUTED)
-        self._status_lbl.pack(side="right", padx=14)
+        self._status_lbl.pack(side="right", padx=(14, 4))
 
         self._scroll = ctk.CTkScrollableFrame(self, fg_color=C_CARD)
         self._scroll.pack(fill="both", expand=True, padx=8, pady=6)
@@ -2258,7 +2247,16 @@ class PairDialog(ctk.CTkToplevel):
                                         command=self._do_pair, state="disabled")
         self._pair_btn.pack(side="right")
 
-    def _scan(self):
+    def _refresh(self):
+        self._status_lbl.configure(text="Refreshing…")
+        self._selected_set.clear()
+        self._pair_btn.configure(state="disabled")
+        self._group_btn.configure(state="disabled")
+        threading.Thread(target=lambda: self._scan(self._PRESENCE_MAX_AGE_REFRESH), daemon=True).start()
+
+    def _scan(self, max_age: int | None = None):
+        if max_age is None:
+            max_age = self._PRESENCE_MAX_AGE
         token = BridgeWindow._slack_token()
         if not token:
             self.after(0, lambda: self._status_lbl.configure(text="No Slack token"))
@@ -2292,7 +2290,7 @@ class PairDialog(ctk.CTkToplevel):
                 if "::fleet-presence::" not in text:
                     continue
                 ts = float(m.get("ts", 0))
-                if now - ts > self._PRESENCE_MAX_AGE:
+                if now - ts > max_age:
                     continue
                 am = re.search(r'agent=(\S+)', text)
                 hm = re.search(r'human=(\S+)', text)
@@ -2310,11 +2308,11 @@ class PairDialog(ctk.CTkToplevel):
             agents = [a for a in agents
                       if a["uid"] != self._self_uid
                       and a["agent"].lower() != AGENT_NAME.lower()]
-            self.after(0, lambda a=agents: self._populate(a))
+            self.after(0, lambda a=agents, w=max_age: self._populate(a, w))
         except Exception as e:
             self.after(0, lambda err=str(e): self._status_lbl.configure(text=f"Error: {err}"))
 
-    def _populate(self, agents: list):
+    def _populate(self, agents: list, max_age: int = _PRESENCE_MAX_AGE):
         self._agents = agents
         for w in self._scroll.winfo_children():
             w.destroy()
@@ -2326,7 +2324,8 @@ class PairDialog(ctk.CTkToplevel):
                          font=("SF Pro Display", 11), text_color=C_MUTED,
                          wraplength=400).pack(pady=20)
             return
-        self._status_lbl.configure(text=f"{len(agents)} agent(s) — select one to Pair, two or more to Group")
+        window_str = f"last {max_age // 60}m"
+        self._status_lbl.configure(text=f"{len(agents)} agent(s) ({window_str}) — select one to Pair, two or more to Group")
         for i, a in enumerate(agents):
             row = ctk.CTkFrame(self._scroll, fg_color=C_BORDER, corner_radius=6)
             row.pack(fill="x", pady=2)

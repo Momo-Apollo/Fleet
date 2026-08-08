@@ -1815,7 +1815,6 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         if self._loading:
             return
         self._loading = True
-        self._refresh_btn.configure(state="disabled")
         self._set_status("Loading…")
 
         def fetch():
@@ -1876,7 +1875,6 @@ class BridgeWindow(_FileAttachMixin, ctk.CTkToplevel):
         self._history.configure(state="disabled")
         self._history.see("end")
         self._loading = False
-        self._refresh_btn.configure(state="normal")
         self._set_status("Ready")
         if self._composing and self._last_sender(text) == self._bridge["peer_name"]:
             self._stop_composing()
